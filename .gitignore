@@ -1,0 +1,5 @@
+build/
+*.o
+*.ppu
+__pycache__/
+private-samples/
