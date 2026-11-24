@@ -46,7 +46,7 @@ begin
   e.kind := kind;
   e.scrap := sc;
   inf.kill.Add(e);
-  while inf.kill.Count > KILL_MAX do begin
+  while inf.kill.Count > killMax do begin
     TKillEntry(inf.kill[0]).Free;
     inf.kill.Delete(0);
   end;
@@ -146,7 +146,7 @@ begin
   s := CurText;
   ind := 0;
   if optIndent and (not pasting) then ind := IndentCol(s, TabStop);
-  if not optInsert then begin
+  if (not optInsert) or (not optReturnSplit) then begin
     { overwrite mode: just go to the next line }
     if (not CD.LastLineKnown) or (CW.line < CD.LastLine) then MoveDown
     else begin
@@ -219,7 +219,7 @@ begin
   s := CurText;
   idx := CurIdx(s, pad);
   if (pad > 0) or (idx > Length(s)) then begin
-    if CD.Seek(CW.line + 1) = CW.line + 1 then begin
+    if optDelJoin and (CD.Seek(CW.line + 1) = CW.line + 1) then begin
       nx := CD.Get(CW.line + 1);
       SetCurText(Copy(s, 1, idx - 1) + Blanks(pad) + nx);
       CD.DeleteLine(CW.line + 1);
@@ -361,7 +361,8 @@ begin
   while (j <= Length(s)) and IsWordCh(s[j]) do Inc(j);
   if j = idx then
     while (j <= Length(s)) and (not IsWordCh(s[j])) and (not IsBlankCh(s[j])) do Inc(j);
-  while (j <= Length(s)) and IsBlankCh(s[j]) do Inc(j);
+  if optDelWs then
+    while (j <= Length(s)) and IsBlankCh(s[j]) do Inc(j);
   KillText(kkFrag, Copy(s, idx, j - idx));
   SetCurText(Copy(s, 1, idx - 1) + Copy(s, j, MaxInt));
 end;
@@ -438,7 +439,7 @@ begin
   a := CD.Get(CW.line - 1);
   ind := IndentCol(a, TabStop);
   s := LTrim(CurText);
-  if s <> '' then SetCurText(Blanks(ind) + s);
+  if (s <> '') and (LastNonBlank(a) > 0) then SetCurText(Blanks(ind) + s);
   MoveDown;
 end;
 

@@ -11,7 +11,7 @@ keeps a **sliding 64K window** of a file in memory, so files of any size can be 
     make test                         # behavioural tests on a pty (python3 + `pip install pyte`)
     build/mkedit [+LINE] [file | wildcard | directory]...
 
-With no file name it asks for one (`File(s) to edit:`); wildcards and directories bring up a pick
+`mkedit file 125` (or `file 125` at the prompt) starts at line 125. With no file name it asks for one (`File(s) to edit:`); wildcards and directories bring up a pick
 list. **F1** shows the key list (laid out like QEdit's help screen), **Esc** the menus.
 
 ## How big files work
@@ -59,16 +59,24 @@ keys, `F12` again. `Esc M W` / `Esc M R` save and load macro files (plain text).
 
 ## Configuration
 
+Colours can be edited live: `Esc O L` (Options, Colors) lets you pick an item, change foreground (Left/Right) and
+background (PgUp/PgDn) with the result showing at once, `S` to save them into the config file, Esc to cancel.
+
 `~/.config/mkedit/mkedit.cfg` (or `$XDG_CONFIG_HOME`), `#` comments:
 
     insert = on             autoindent = on          wordwrap = off
     backup = on             entermatching = off      smarttabs = off
     expandtabs = auto       # auto | on | off, see below
     tabsout = off           cutcopyline = on         lineblockbefore = on
+    trimblanks = on         eofmarker = on           lastfileprompt = on
+    delchjoin = on          returnsplit = on         delrtwordblanks = on
+    findoptions = I         replaceoptions = I       killbuffer = 30
+    extensions = .c .h      # tried in turn for a name that does not exist and has no dot
     rmargin = 76            tabwidth = 8             ctabwidth = 4        screenstep = 8
     color_text = 7,1        # fg 0-15, bg 0-7; also _block _status _statusoff _menu _menuselect _box _message
     key F9 = DupLine        # rebind; two-key sequences too: key C-k a = DropAnchor
     key A-d = none          # unbind
+    key A-t = MacroBegin EditFile 'notes.txt' Return    # QCONFIG style key macro: commands and 'text'
 
 ## Differences from QEdit
 
@@ -81,13 +89,15 @@ keys, `F12` again. `Esc M W` / `Esc M R` save and load macro files (plain text).
   The screen layer (FPC `Video`) is CP437, so characters that CP437 lacks (CJK, emoji) show as `?`.
 * **Macros** are recorded as key presses (as in QEdit) but there is no `QCONFIG` program; use the
   config file for keys and colours.
-* **Line blocks** are pasted *before* the cursor line (`lineblockbefore = off` for after).
+* Line blocks go *after* the cursor line, as in QEdit (`lineblockbefore = on` for above).
+* When the last file is closed (`^KD`, `^KX`, `^KQ`) mkedit asks for another one, as QEdit does by default; Esc leaves (`lastfileprompt = off` to quit at once). The menu's Quit asks before discarding changes.
+* **KillFile** (`^KZ`) deletes the file from disk but leaves it loaded and marked changed.
+* Trailing blanks are removed from lines you edited when the cursor leaves them (`trimblanks = off`).
 * **DeleteBlock** puts the whole block in the kill buffer as one entry; the kill buffer holds 30 entries per file.
 * Scrap and scratch buffers, and blocks read with `@R`, live in memory (a block of hundreds of MB
   should be written with `@W` rather than copied).
 * A terminal hang-up (or SIGHUP/SIGTERM) keeps unsaved work as `NAME.mkedit-save`.
-* Not implemented: EGA/VGA mode switching, entry screen, status line at the bottom, multiple
-  keyboard definition files, pasting multi-megabyte scraps from outside (bracketed paste works).
+* Not implemented from QEdit's QCONFIG options: status line at the bottom / fill character / boxed display, cursor-line colour, per-extension tab widths, custom help screen file, formfeed after printing, prompt-for-file on new window, close-window-on-quit, Ctrl-Z terminator, Alt-numeric-keypad codes, EGA/VGA mode switching, entry screen, `WSKEY.DAT`/`BRIEF.DAT` style key files, pasting multi-megabyte scraps from outside (bracketed paste works).
 
 ## Tests
 

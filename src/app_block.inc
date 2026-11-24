@@ -19,6 +19,7 @@ begin
   SetBlockDoc(nil);
   bKind := bkNone;
   bFollow := False;
+  bHalf := 0;
 end;
 
 function TApp.BlockActive: Boolean;
@@ -33,6 +34,7 @@ end;
   second press fixes its end. Pressing again while a block exists extends it. }
 procedure TApp.MarkToggle(kind: TBlockKind; incl: Boolean);
 begin
+  if bHalf <> 0 then ClearBlock;
   if (bKind <> bkNone) and (bDoc = CD) and bFollow and (bKind = kind) then begin
     bEL := CW.line;
     bEC := CW.col;
@@ -60,6 +62,7 @@ begin
   bFollow := True;
 end;
 
+{ ^KB and ^KK: the block is not shown until both ends have been marked. }
 procedure TApp.MarkBegin;
 begin
   if (bKind <> bkNone) and (bDoc <> CD) then ClearBlock;
@@ -67,21 +70,36 @@ begin
     SetBlockDoc(CD);
     bKind := bkStream;
     bIncl := False;
+    bFollow := False;
     bSL := CW.line; bSC := CW.col;
     bEL := CW.line; bEC := CW.col;
-    bFollow := True;
+    bHalf := 1;
+    Msg('Block begin marked; mark its end with F8');
   end else begin
     bSL := CW.line; bSC := CW.col;
-    if bKind <> bkStream then begin bKind := bkStream; bIncl := False; end;
+    if bHalf = 2 then bHalf := 0;
+    if bHalf = 0 then begin bKind := bkStream; bIncl := False; bFollow := False; end;
   end;
 end;
 
 procedure TApp.MarkEnd;
 begin
-  if (bKind = bkNone) or (bDoc <> CD) then begin Msg('Mark the block begin first (F7)'); Exit; end;
-  bEL := CW.line; bEC := CW.col;
-  bFollow := False;
-  if bKind = bkNone then bKind := bkStream;
+  if (bKind <> bkNone) and (bDoc <> CD) then ClearBlock;
+  if bKind = bkNone then begin
+    SetBlockDoc(CD);
+    bKind := bkStream;
+    bIncl := False;
+    bFollow := False;
+    bSL := CW.line; bSC := CW.col;
+    bEL := CW.line; bEC := CW.col;
+    bHalf := 2;
+    Msg('Block end marked; mark its begin with F7');
+  end else begin
+    bEL := CW.line; bEC := CW.col;
+    bFollow := False;
+    if bHalf = 1 then bHalf := 0;
+    if bHalf = 0 then begin bKind := bkStream; bIncl := False; end;
+  end;
 end;
 
 function TApp.ExtractBlock(d: TDoc; kind: TBlockKind; l1: Int64; c1: Integer; l2: Int64; c2: Integer): TScrap;
@@ -377,7 +395,10 @@ begin
     GoLine(CW.line);
     Msg('Cut to scrap buffer');
   end else
-    Msg('Copied to scrap buffer');
+    begin
+      if fromBlock then ClearBlock;
+      Msg('Copied to scrap buffer');
+    end;
 end;
 
 { Insert a scrap at the cursor. Line scraps leave the cursor on their first line, stream scraps put it

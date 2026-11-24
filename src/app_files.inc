@@ -20,6 +20,9 @@ begin
     OpenFile(sel);
     Exit;
   end;
+  if (not FileExists(full)) and (Pos('.', ExtractFileName(full)) = 0) then
+    for idx := 0 to defExts.Count - 1 do
+      if FileExists(full + defExts[idx]) then begin full := full + defExts[idx]; Break; end;
   d := FindDoc(full);
   if d <> nil then begin
     ShowDoc(CW, d);
@@ -53,6 +56,10 @@ begin
     parts.DelimitedText := Trim(spec);
     for i := 0 to parts.Count - 1 do begin
       if parts[i] = '' then Continue;
+      if (i > 0) and (StrToIntDef(parts[i], -1) > 0) and (Pos('*', parts[i - 1]) = 0) then begin
+        GoLine(StrToInt(parts[i]) - 1);      { "file 125": start at that line }
+        Continue;
+      end;
       if (Pos('*', parts[i]) > 0) or (Pos('?', parts[i]) > 0) then begin
         if PickFile(ExpandHome(parts[i]), sel) then OpenFile(sel);
       end else
@@ -68,6 +75,7 @@ var
   err, fn: string;
 begin
   Result := False;
+  if d = CD then TrimEdited(-1);
   if d.Name = '' then begin
     if not Prompt('Save as: <Esc = abort>', '', fn) then Exit;
     fn := Trim(fn);
@@ -82,15 +90,38 @@ begin
   Result := True;
 end;
 
+procedure TApp.AskForFile(ph: TDoc);
+var
+  sel: string;
+begin
+  if Prompt(FileEditPrompt, '', sel) then OpenFiles(sel);
+  if (docs.Count > 1) and (DocIndex(ph) >= 0) then CloseDoc(ph)
+  else if docs.Count <= 1 then running := False;
+  msgText := '';
+end;
+
 procedure TApp.CloseDoc(d: TDoc);
 var
   idx, i, repl: Integer;
   inf: TDocInfo;
+  ph: TDoc;
 begin
   if bDoc = d then ClearBlock;
   idx := DocIndex(d);
   if idx < 0 then Exit;
   if docs.Count = 1 then begin
+    if optLastPrompt and running and (nwins > 0) then begin
+      { the last file went: ask for another one (Esc ends the editor), like QEdit }
+      ph := NewDoc('');
+      docs.Add(ph);
+      for i := 0 to nwins - 1 do ShowDoc(wins[i], ph);
+      docs.Delete(0);
+      inf := Info(d);
+      d.Free;
+      inf.Free;
+      AskForFile(ph);
+      Exit;
+    end;
     for i := 0 to nwins - 1 do DetachDoc(wins[i]);
     docs.Delete(0);
     inf := Info(d);
@@ -121,7 +152,7 @@ procedure TApp.DoEditFile;
 var
   s: string;
 begin
-  if not Prompt('File(s) to edit: <Esc = abort>', '', s) then Exit;
+  if not Prompt(FileEditPrompt, '', s) then Exit;
   OpenFiles(s);
 end;
 
@@ -140,7 +171,7 @@ begin
   CD.Modified := True;
 end;
 
-{ 0 = Exit (ask), 1 = File (save), 2 = PQuit (warn), 3 = Quit (discard) }
+{ 0 = Exit (ask), 1 = File (save), 2 = PQuit and 3 = Quit (warn if changed, then discard) }
 procedure TApp.DoExit(mode: Integer);
 var
   d: TDoc;
@@ -155,7 +186,7 @@ begin
     end;
     1: if d.Modified then
       if not SaveDoc(d) then Exit;
-    2: if d.Modified then
+    2, 3: if d.Modified then
       if AskKey('File has changed. Abandon the changes? (Y/N)', 'YN') <> 'Y' then Exit;
   end;
   CloseDoc(d);
@@ -219,7 +250,10 @@ begin
   if AskKey('Delete ' + d.Name + ' from disk? (Y/N)', 'YN') <> 'Y' then Exit;
   if FileExists(d.Name) then
     if not DeleteFile(d.Name) then begin Msg('Cannot delete ' + d.Name); Exit; end;
-  CloseDoc(d);
+  { as in QEdit the file stays loaded, marked as changed, so it can still be saved again }
+  d.Modified := True;
+  d.NewFile := True;
+  Msg('Deleted ' + d.Name + ' from disk');
 end;
 
 procedure TApp.DoShell;
@@ -502,6 +536,7 @@ procedure TApp.DoMacroPlay(const nm: string);
 var
   m: TMacro;
   i, n: Integer;
+  k0: TKey;
 begin
   if nm = '' then m := scrapMacro
   else begin
@@ -518,9 +553,20 @@ begin
     SetLength(inject, Length(inject) - injPos);
     injPos := 0;
   end;
-  i := Length(inject);
-  SetLength(inject, i + Length(m.keys));
-  for n := 0 to High(m.keys) do inject[i + n] := m.keys[n];
+  for n := 0 to High(m.keys) do begin
+    if (m.keys[n].code = kcNone) and (m.keys[n].n = 1) then begin
+      { CurrentFilename: type out the file name }
+      k0.code := kcChar; k0.mods := []; k0.n := 0;
+      for i := 1 to Length(CD.Name) do begin
+        k0.ch := CD.Name[i];
+        SetLength(inject, Length(inject) + 1);
+        inject[High(inject)] := k0;
+      end;
+    end else begin
+      SetLength(inject, Length(inject) + 1);
+      inject[High(inject)] := m.keys[n];
+    end;
+  end;
 end;
 
 procedure TApp.DoMacroFile(write: Boolean);

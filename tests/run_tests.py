@@ -110,7 +110,7 @@ def cursor_beyond_end_pads(env):
 @test
 def home_end(env):
     s, t = edit(env, "  abc  \n", END, "!", HOME, "<")
-    eq(t, "<  abc!  \n")
+    eq(t, "<  abc!\n")     # trailing blanks of an edited line are removed
 
 @test
 def tab_inserts_spaces(env):
@@ -285,13 +285,13 @@ def scroll_commands(env):
 @test
 def line_block_copy(env):
     s, t = edit(env, "a\nb\nc\nd\n", alt("l"), DOWN, alt("l"), DOWN, DOWN, alt("c"))
-    # copy inserted before the cursor line (line 'd')
-    eq(t, "a\nb\nc\na\nb\nd\n")
+    # line blocks are inserted after the cursor line (line 'c') unless configured otherwise
+    eq(t, "a\nb\nc\nd\na\nb\n")
 
 @test
 def line_block_move(env):
     s, t = edit(env, "a\nb\nc\nd\n", alt("l"), alt("l"), DOWN, DOWN, alt("m"))
-    eq(t, "b\na\nc\nd\n")
+    eq(t, "b\nc\na\nd\n")
 
 @test
 def line_block_delete_and_unkill(env):
@@ -324,12 +324,12 @@ def column_block_copy(env):
 def cut_and_paste(env):
     # Shift-Del cuts the marked line, Shift-Ins pastes it before the cursor line
     s, t = edit(env, "a\nb\nc\n", alt("l"), alt("l"), "\x1b[3;2~", DOWN, DOWN, "\x1b[2;2~")
-    eq(t, "b\na\nc\n")
+    eq(t, "b\nc\na\n")
 
 @test
 def cut_line_when_nothing_marked_and_paste_twice(env):
     s, t = edit(env, "a\nb\nc\n", "\x1b[3;2~", DOWN, "\x1b[2;2~", "\x1b[2;2~")
-    eq(t, "b\na\na\nc\n")
+    eq(t, "b\nc\na\na\n")
 
 @test
 def copy_stream_block_to_scrap_and_paste(env):
@@ -347,7 +347,7 @@ def block_in_other_file(env):
     s.send(ctrl("k") + "n", 0.3)
     s.send(alt("c"), 0.3)
     s.send(SAVE, 0.4)
-    eq(read(env, "b.txt"), "one\nX\n")
+    eq(read(env, "b.txt"), "X\none\n")
     eq(read(env, "a.txt"), "one\ntwo\n")
 
 @test
@@ -418,6 +418,8 @@ def exit_prompts_to_save(env):
     s.send(ctrl("k") + "d", 0.3)
     assert "Save changes" in s.text(), s.text()
     s.send("n", 0.3)
+    assert "File(s) to edit" in s.text(), "the last file went: expect the file prompt\n" + s.text()
+    s.send(ESC, 0.3)
     assert s.exited()
     eq(read(env, "a.txt"), "x\n")
 
@@ -428,6 +430,7 @@ def exit_save_yes(env):
     s.send("abc", 0.2)
     s.send(ctrl("k") + "d", 0.3)
     s.send("y", 0.4)
+    s.send(ESC, 0.3)
     assert s.exited()
     eq(read(env, "a.txt"), "abcx\n")
 
@@ -437,6 +440,7 @@ def file_command_saves_and_exits(env):
     s = env.start("a.txt")
     s.send("abc", 0.2)
     s.send(ctrl("k") + "x", 0.4)
+    s.send(ESC, 0.3)
     assert s.exited()
     eq(read(env, "a.txt"), "abcx\n")
 
@@ -451,6 +455,21 @@ def pquit_warns(env):
     assert not s.exited(0.5)
     s.send(ctrl("k") + "q", 0.3)
     s.send("y", 0.3)
+    s.send(ESC, 0.3)
+    assert s.exited()
+    eq(read(env, "a.txt"), "x\n")
+
+@test
+def menu_quit_asks_when_modified(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2)
+    s.send(ESC, 0.3); s.send("q", 0.3); s.send("u", 0.3)
+    assert "Abandon" in s.text(), s.text()
+    s.send("n", 0.3)
+    assert not s.exited(0.5)
+    s.send(ESC, 0.3); s.send("q", 0.3); s.send("u", 0.3); s.send("y", 0.3)
+    s.send(ESC, 0.3)
     assert s.exited()
     eq(read(env, "a.txt"), "x\n")
 
@@ -742,7 +761,7 @@ def big_file_copy_block_far(env):
     s.send(SAVE, 3.0)
     lines = read(env, "big.txt").split("\n")
     eq(len(lines), n + 3)
-    assert lines[24999].startswith("line 10:") and lines[25000].startswith("line 11:"), lines[24998:25002]
+    assert lines[25000].startswith("line 10:") and lines[25001].startswith("line 11:"), lines[24998:25003]
 
 @test
 def temp_files_removed(env):
@@ -755,6 +774,7 @@ def temp_files_removed(env):
     prefix = "mkedit-%d-" % pid
     assert [f for f in os.listdir(tmp) if f.startswith(prefix)], "temp files should exist while editing"
     s.send(ctrl("k") + "q", 0.4)
+    s.send(ESC, 0.3)
     assert s.exited()
     eq([f for f in os.listdir(tmp) if f.startswith(prefix)], [], "temp files left behind")
 
@@ -910,7 +930,7 @@ def macro_file_write_and_read(env):
     s.send(ESC, 0.3); s.send("m", 0.2); s.send("w", 0.3)
     s.send("m.mac\r", 0.4)
     assert os.path.exists(env.path("m.mac"))
-    s.send(ctrl("k") + "q", 0.3); s.send("y", 0.3)
+    s.send(ctrl("k") + "q", 0.3); s.send("y", 0.3); s.send(ESC, 0.3)
     env.write("b.txt", "1\n2\n")
     s2 = env.start("b.txt")
     s2.send(ESC, 0.3); s2.send("m", 0.2); s2.send("r", 0.3)
@@ -982,7 +1002,157 @@ def terminal_restored_on_exit(env):
     env.write("a.txt", "x\n")
     s = env.start("a.txt")
     s.send(ctrl("k") + "d", 0.4)
+    s.send(ESC, 0.3)
     assert s.exited()
+
+# ------------------------------------------------------------------ from chapters 2 and 3 of the manual
+@test
+def kill_file_deletes_from_disk_but_stays_loaded(env):
+    env.write("a.txt", "keep me\n")
+    s = env.start("a.txt")
+    s.send(ctrl("k") + "z", 0.3)
+    s.send("y", 0.4)
+    assert not os.path.exists(env.path("a.txt"))
+    assert "keep me" in s.row(1) and "*" in s.row(0), s.text()
+    s.send(SAVE, 0.4)
+    eq(read(env, "a.txt"), "keep me\n")
+
+@test
+def mark_begin_end_block_hidden_until_both_set(env):
+    env.write("a.txt", "abcdef\n")
+    s = env.start("a.txt")
+    s.send(RIGHT + ctrl("k") + "b", 0.3)
+    s.send(RIGHT * 3, 0.3)
+    eq(s.highlighted(1), "", "nothing is shown after ^KB alone")
+    s.send(ctrl("k") + "k", 0.3)
+    eq(s.highlighted(1), "bcd")
+
+@test
+def copy_to_scrap_unmarks_block(env):
+    env.write("a.txt", "abcdef\n")
+    s = env.start("a.txt")
+    s.send(alt("a") + RIGHT * 2 + alt("a"), 0.3)
+    assert s.highlighted(1) != ""
+    s.send("\x1b[2;5~", 0.3)
+    eq(s.highlighted(1), "")
+
+@test
+def end_of_file_marker(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    assert s.row(2).strip() == "<*** End of File ***>", s.text()
+
+@test
+def found_text_is_highlighted_until_next_key(env):
+    env.write("a.txt", "one two three\n")
+    s = env.start("a.txt")
+    s.send(ctrl("q") + "f", 0.3); s.send("two\r", 0.3); s.send("\r", 0.4)
+    eq(s.highlighted(1), "two")
+    s.send(RIGHT, 0.3)
+    eq(s.highlighted(1), "")
+
+@test
+def trailing_blanks_removed_from_edited_lines_only(env):
+    env.write("a.txt", "keep   \nedit\n")
+    s = env.start("a.txt")
+    s.send(DOWN + END + "   ", 0.3)
+    s.send(UP, 0.3)
+    s.send(SAVE, 0.4)
+    eq(read(env, "a.txt"), "keep   \nedit\n")
+
+@test
+def filename_with_line_number(env):
+    env.write("a.txt", "".join("line%d\n" % i for i in range(1, 100)))
+    s = env.start("a.txt", "40")
+    eq(s.line_no(), 40)
+    env.write("b.txt", "".join("b%d\n" % i for i in range(1, 100)))
+    s2 = env.start("a.txt")
+    s2.send(alt("e"), 0.3); s2.send("b.txt 25\r", 0.5)
+    eq(s2.line_no(), 25)
+
+@test
+def default_extensions(env):
+    os.makedirs(os.path.join(env.home, ".config", "mkedit"))
+    with open(os.path.join(env.home, ".config", "mkedit", "mkedit.cfg"), "w") as f:
+        f.write("extensions = .pas .c\n")
+    env.write("prog.c", "int x;\n")
+    s = env.start("prog")
+    assert s.stat()[4].endswith("prog.c"), s.stat()
+    s2 = env.start("nothing")
+    assert "nothing" in s2.stat()[4] and "prog.c" not in s2.stat()[4], s2.stat()
+
+@test
+def config_macro_with_commands_and_text(env):
+    os.makedirs(os.path.join(env.home, ".config", "mkedit"))
+    with open(os.path.join(env.home, ".config", "mkedit", "mkedit.cfg"), "w") as f:
+        f.write("key A-t = MacroBegin Return 'hello ' CurrentFilename\n")
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(alt("t"), 0.6)
+    s.send(SAVE, 0.4)
+    eq(read(env, "a.txt"), "\nhello " + env.path("a.txt") + "x\n")
+
+@test
+def prompt_box_is_cyan_by_default(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(alt("e"), 0.3)
+    eq(s.screen.buffer[s.rows // 2 - 2][3].bg, "cyan")
+
+@test
+def color_editor_changes_and_saves(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(ESC, 0.3); s.send("o", 0.3); s.send("l", 0.4)
+    assert "Prompt boxes" in s.text(), s.text()
+    eq(s.screen.buffer[1][0].bg, "blue")
+    s.send(PGDN, 0.2)                                   # text background: blue -> green
+    eq(s.screen.buffer[1][0].bg, "green")
+    s.send("s", 0.4)
+    cfg = open(os.path.join(env.home, ".config", "mkedit", "mkedit.cfg")).read()
+    assert "color_text = 7,2" in cfg and "color_box = 15,3" in cfg, cfg
+    s2 = env.start("a.txt")
+    eq(s2.screen.buffer[1][0].bg, "green")
+
+@test
+def color_editor_escape_restores(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(ESC, 0.3); s.send("o", 0.3); s.send("l", 0.4)
+    s.send(PGDN, 0.2)
+    s.send(ESC, 0.4)
+    eq(s.screen.buffer[1][0].bg, "blue")
+
+@test
+def align_command_only_moves_when_line_above_blank(env):
+    cfg = os.path.join(env.home, ".config", "mkedit"); os.makedirs(cfg)
+    with open(os.path.join(cfg, "mkedit.cfg"), "w") as f:
+        f.write("key F10 = Align\n")
+    s, t = edit(env, "    abc\n  def\n\n  ghi\n", DOWN, "\x1b[21~", "\x1b[21~", "\x1b[21~")
+    eq(t, "    abc\n    def\n\n  ghi\n")
+
+@test
+def delch_join_can_be_turned_off(env):
+    cfg = os.path.join(env.home, ".config", "mkedit"); os.makedirs(cfg)
+    with open(os.path.join(cfg, "mkedit.cfg"), "w") as f:
+        f.write("delchjoin = off\nreturnsplit = off\n")
+    s, t = edit(env, "ab\ncd\n", END, DEL)
+    eq(t, "ab\ncd\n")
+    s, t = edit(env, "abcd\n", RIGHT * 2, ENTER, "X", name="b.txt")
+    eq(t, "abcd\nX\n")
+
+@test
+def find_and_replace_default_options_configurable(env):
+    cfg = os.path.join(env.home, ".config", "mkedit"); os.makedirs(cfg)
+    with open(os.path.join(cfg, "mkedit.cfg"), "w") as f:
+        f.write("findoptions = W\nreplaceoptions = IN\n")
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(ctrl("q") + "f", 0.3); s.send("q\r", 0.3)
+    rows = s.rows_text()
+    i = [k for k, r in enumerate(rows) if "Options [IWB]" in r][0]
+    eq(rows[i + 1].strip("│ ").strip(), "W", "the configured default find options")
+
 
 def main():
     verbose = "-v" in sys.argv

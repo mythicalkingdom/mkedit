@@ -9,9 +9,9 @@ uses
   SysUtils, Classes, BaseUnix, termio, Video, uCP437, uKeys, uScreen, uText, uDoc, uDefs;
 
 const
+  FileEditPrompt = 'File(s) to edit (a wildcard like *.c gives a pick list): <Esc = abort>';
   VERSION = '0.1.0';
   MAXWIN = 8;
-  KILL_MAX = 30;
 
 var
   { colours: fg 0..15, bg 0..7; "color_NAME = fg,bg" in the config file changes them }
@@ -22,8 +22,8 @@ var
   cMenuFg: Byte = 0;   cMenuBg: Byte = 7;
   cMenuSelFg: Byte = 15; cMenuSelBg: Byte = 0;
   cHotFg: Byte = 4;
-  cBoxFg: Byte = 15;   cBoxBg: Byte = 4;
-  cMsgFg: Byte = 14;   cMsgBg: Byte = 4;
+  cBoxFg: Byte = 15;   cBoxBg: Byte = 3;
+  cMsgFg: Byte = 15;   cMsgBg: Byte = 2;
 
 type
   EHangup = class(Exception);
@@ -87,17 +87,25 @@ type
     { options }
     optInsert, optIndent, optWrap, optBox, optMatching, optSmart, optExpand, optTabsOut, optBackup: Boolean;
     optCutLine, optLineBefore: Boolean;
+    optTrim, optEof, optDelJoin, optReturnSplit, optDelWs, optLastPrompt: Boolean;
+    killMax: Integer;
+    defExts: TStringList;
+    fOptsR: string;
+    hlLine: Int64;
+    hlCol, hlLen: Integer;
+    cfgMacros: TStringList;
     expandMode: Integer;   { 0 = auto (keep the tabs of files that have them), 1 = on, 2 = off }
     rmargin, ptab, ctab, scrStep: Integer;
     printLeft, printPage: Integer;
     { search }
-    fFind, fRepl, fOpts: string;
+    fFind, fRepl, fOpts, fOptsF: string;
     { blocks }
     bDoc: TDoc;
     bKind: TBlockKind;
     bSL, bEL: Int64;
     bSC, bEC: Integer;
     bFollow, bIncl: Boolean;
+    bHalf: Integer;        { 1: only ^KB given, 2: only ^KK given; the block is not shown yet }
     scrap: TScrap;
     scratch: TStringList;
     { keys and macros }
@@ -137,6 +145,8 @@ type
     procedure SyncWin(w: TWin);
     procedure Adjust(w: TWin);
     procedure GoLine(ln: Int64);
+    procedure TrimEdited(newLine: Int64);
+    procedure AskForFile(ph: TDoc);
     procedure SavePrev;
     { --- drawing --- }
     procedure DrawAll;
@@ -189,6 +199,8 @@ type
     procedure MovePage(dir: Integer; half: Boolean);
     procedure ScrollView(dir: Integer; moveCursor: Boolean);
     procedure PlaceScreen(mode: Integer);
+    procedure DoColors;
+    procedure SaveColors;
     procedure DoGotoLine;
     procedure DoGotoBlock(atEnd: Boolean);
     procedure DoBegEndFile(atEnd: Boolean);
@@ -251,6 +263,7 @@ type
     procedure Run;
     procedure EmergencySave;
     procedure LoadConfig;
+    procedure BuildCfgMacros;
   end;
 
 implementation
@@ -327,11 +340,15 @@ begin
   end;
   optInsert := True; optIndent := True; optWrap := False; optBox := False; optMatching := False;
   optSmart := False; optExpand := True; optTabsOut := False; optBackup := True;
-  optCutLine := True; optLineBefore := True;
+  optCutLine := True; optLineBefore := False;
+  optTrim := True; optEof := True; optDelJoin := True; optReturnSplit := True; optDelWs := True;
+  optLastPrompt := True; killMax := 30; fOptsR := 'I'; hlLen := 0;
+  defExts := TStringList.Create;
+  cfgMacros := TStringList.Create;
   expandMode := 0;
   rmargin := 76; ptab := 8; ctab := 4; scrStep := 8;
   printLeft := 0; printPage := 0;
-  fOpts := 'I';
+  fOpts := 'I'; fOptsF := 'I';
   bKind := bkNone;
   s := GetEnvironmentVariable('MKEDIT_BACKUP');
   if s = '0' then optBackup := False;
@@ -356,6 +373,9 @@ begin
   for i := 0 to macros.Count - 1 do TMacro(macros.Objects[i]).Free;
   macros.Free;
   scrapMacro.Free;
+  defExts.Free;
+  for i := 0 to cfgMacros.Count - 1 do cfgMacros.Objects[i].Free;
+  cfgMacros.Free;
   bindMap.Free;
   inherited Destroy;
 end;
@@ -517,8 +537,23 @@ procedure TApp.GoLine(ln: Int64);
 var
   lo, hi: Int64;
 begin
+  TrimEdited(ln);
   PinRange(CW, lo, hi);
   CW.line := CD.Seek(ln, lo, hi);
+end;
+
+{ Remove trailing blanks from a line that was edited, when the cursor leaves it. }
+procedure TApp.TrimEdited(newLine: Int64);
+var
+  t: string;
+begin
+  if optTrim and CW.undoValid and (CW.undoLine <> newLine) then begin
+    if CD.InBuf(CW.undoLine) then begin
+      t := CD.Get(CW.undoLine);
+      if RTrim(t) <> t then CD.SetLine(CW.undoLine, RTrim(t));
+    end;
+    CW.undoValid := False;
+  end;
 end;
 
 procedure TApp.SavePrev;
@@ -591,7 +626,7 @@ var
   sc, ec: Integer;
 begin
   Result := False;
-  if (bKind = bkNone) or (bDoc = nil) then Exit;
+  if (bKind = bkNone) or (bDoc = nil) or (bHalf <> 0) then Exit;
   sl := bSL; sc := bSC; el := bEL; ec := bEC;
   case bKind of
     bkLine: begin
@@ -648,6 +683,8 @@ begin
   width := ScrW;
   ScrFill(0, y, width, 32, cTextFg, cTextBg);
   isLast := w.doc.LastLineKnown and (ln > w.doc.LastLine);
+  if optEof and w.doc.LastLineKnown and (ln = w.doc.LastLine + 1) then
+    ScrPutsN(0, y, '<*** End of File ***>', width, 15, cTextBg);
   if isLast or (not w.doc.InBuf(ln)) then Exit;
   s := w.doc.Get(ln);
   tw := ptab;
@@ -683,6 +720,10 @@ begin
     end;
     Inc(i, k);
   end;
+  { the string just found }
+  if (hlLen > 0) and (ln = hlLine) and (w = wins[cur]) then
+    for x := hlCol to hlCol + hlLen - 1 do
+      if (x >= w.left) and (x - w.left < width) then ScrAttr(x - w.left, y, 1, 0, 6);
   { block highlight beyond the end of the text }
   if hasBlk then begin
     if col < w.left then col := w.left;
@@ -838,6 +879,7 @@ begin
   if k.code = kcPasteBegin then begin pasting := True; Exit; end;
   if k.code = kcPasteEnd then begin pasting := False; Exit; end;
   msgText := '';
+  hlLen := 0;
   if pending <> '' then begin
     seq := pending + ' ' + NormSecond(k);
     pending := '';
@@ -891,6 +933,7 @@ begin
     k := GetKey;
     HandleKey(k);
     if running and (nwins > 0) then begin
+      TrimEdited(CW.line);
       TrackBlock;
       CW.doc.Seek(CW.line);
     end;
@@ -912,13 +955,16 @@ begin
   cur := 0;
   w.h := ScrH;
   w.y := 0;
-  for i := 0 to files.Count - 1 do OpenFile(files[i]);
+  for i := 0 to files.Count - 1 do begin
+    if (i > 0) and (StrToIntDef(files[i], -1) > 0) and (docs.Count > 0) then GoLine(StrToInt(files[i]) - 1)
+    else OpenFile(files[i]);
+  end;
   if docs.Count = 0 then begin
     { nothing named on the command line: ask }
     ph := NewDoc('');
     docs.Add(ph);
     ShowDoc(w, ph);
-    if Prompt('File(s) to edit: <Esc = abort>', '', sel) then OpenFiles(sel);
+    if Prompt(FileEditPrompt, '', sel) then OpenFiles(sel);
     if docs.Count > 1 then CloseDoc(ph) else running := False;
     msgText := '';
   end;
@@ -939,6 +985,94 @@ begin
     d := TDoc(docs[i]);
     if d.Modified and (d.Name <> '') then
       d.Save(d.Name + '.mkedit-save', False, False, err);
+  end;
+end;
+
+{ "key F1 = MacroBegin EditFile 'help.dat' Return": commands become the keys that run them, quoted
+  text becomes typed characters. }
+procedure TApp.BuildCfgMacros;
+var
+  i, p, q, j, bi: Integer;
+  nm, rest, tok, kstr, best: string;
+  m: TMacro;
+  c: TCmd;
+  qc: Char;
+
+  procedure AddKey(const k: TKey);
+  begin
+    SetLength(m.keys, Length(m.keys) + 1);
+    m.keys[High(m.keys)] := k;
+  end;
+
+  procedure AddText(const t: string);
+  var
+    n, ix: Integer;
+    k: TKey;
+  begin
+    ix := 1;
+    while ix <= Length(t) do begin
+      n := CharLen(t, ix);
+      k.code := kcChar; k.mods := []; k.ch := Copy(t, ix, n); k.n := 0;
+      AddKey(k);
+      Inc(ix, n);
+    end;
+  end;
+
+  procedure AddCmd(cmd: TCmd);
+  var
+    b, sp: Integer;
+    bestk: string;
+    k: TKey;
+  begin
+    bestk := '';
+    for b := 0 to bindMap.Count - 1 do
+      if TCmd(PtrInt(bindMap.Objects[b])) = cmd then
+        if (bestk = '') or (Length(bindMap[b]) < Length(bestk)) then bestk := bindMap[b];
+    if bestk = '' then Exit;
+    sp := Pos(' ', bestk);
+    if sp > 0 then begin
+      AddKey(KeyFromName(Copy(bestk, 1, sp - 1)));
+      AddKey(KeyFromName(Copy(bestk, sp + 1, MaxInt)));
+    end else begin
+      k := KeyFromName(bestk);
+      AddKey(k);
+    end;
+  end;
+
+begin
+  for i := 0 to cfgMacros.Count - 1 do begin
+    p := Pos(#9, cfgMacros[i]);
+    nm := Copy(cfgMacros[i], 1, p - 1);
+    rest := Trim(Copy(cfgMacros[i], p + 1, MaxInt));
+    m := TMacro.Create;
+    q := 1;
+    while q <= Length(rest) do begin
+      while (q <= Length(rest)) and (rest[q] = ' ') do Inc(q);
+      if q > Length(rest) then Break;
+      if rest[q] in ['''', '"'] then begin
+        qc := rest[q];
+        j := q + 1;
+        while (j <= Length(rest)) and (rest[j] <> qc) do Inc(j);
+        AddText(Copy(rest, q + 1, j - q - 1));
+        q := j + 1;
+      end else begin
+        j := q;
+        while (j <= Length(rest)) and (rest[j] <> ' ') do Inc(j);
+        tok := Copy(rest, q, j - q);
+        q := j;
+        if SameText(tok, 'CurrentFilename') then begin
+          AddKey(KeyFromName('F20'));   { placeholder, replaced by the file name when played }
+          m.keys[High(m.keys)].code := kcNone;
+          m.keys[High(m.keys)].n := 1;
+        end else begin
+          c := CmdByName(tok);
+          if c <> cmNone then AddCmd(c);
+        end;
+      end;
+    end;
+    bi := macros.IndexOf(nm);
+    if bi >= 0 then begin TMacro(macros.Objects[bi]).Free; macros.Delete(bi); end;
+    macros.AddObject(nm, m);
   end;
 end;
 
@@ -991,6 +1125,21 @@ begin
       else if k = 'entermatching' then optMatching := BoolVal(v)
       else if k = 'cutcopyline' then optCutLine := BoolVal(v)
       else if k = 'lineblockbefore' then optLineBefore := BoolVal(v)
+      else if k = 'trimblanks' then optTrim := BoolVal(v)
+      else if k = 'eofmarker' then optEof := BoolVal(v)
+      else if k = 'delchjoin' then optDelJoin := BoolVal(v)
+      else if k = 'returnsplit' then optReturnSplit := BoolVal(v)
+      else if k = 'delrtwordblanks' then optDelWs := BoolVal(v)
+      else if k = 'lastfileprompt' then optLastPrompt := BoolVal(v)
+      else if k = 'findoptions' then fOptsF := UpperCase(v)
+      else if k = 'replaceoptions' then fOptsR := UpperCase(v)
+      else if (k = 'killbuffer') and (n >= 0) and (n <= 300) then killMax := n
+      else if k = 'extensions' then begin
+        defExts.Clear;
+        defExts.Delimiter := ' ';
+        defExts.StrictDelimiter := True;
+        defExts.DelimitedText := v;
+      end
       else if Copy(k, 1, 6) = 'color_' then begin
         j := Pos(',', v);
         if j > 0 then begin
@@ -1019,7 +1168,9 @@ begin
         kn := Trim(Copy(line, 5, p - 5));
         cmd := CmdByName(v);
         j := bindMap.IndexOf(kn);
-        if SameText(v, 'none') then begin
+        if SameText(Copy(v, 1, 10), 'MacroBegin') then begin
+          cfgMacros.Add(kn + #9 + Copy(v, 11, MaxInt));
+        end else if SameText(v, 'none') then begin
           if j >= 0 then bindMap.Delete(j);
         end else if cmd <> cmNone then begin
           if j >= 0 then bindMap.Delete(j);
@@ -1030,6 +1181,7 @@ begin
   finally
     sl.Free;
   end;
+  BuildCfgMacros;
 end;
 
 {$I app_edit.inc}

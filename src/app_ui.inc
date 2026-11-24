@@ -657,6 +657,7 @@ begin
     cmSetPtabwidth: if PromptInt('Physical tab width [1..16]: <Esc = abort>', ptab, 1, 16, v) then ptab := v;
     cmSetCtabwidth: if PromptInt('C tab width [1..16]: <Esc = abort>', ctab, 1, 16, v) then ctab := v;
     { --- other --- }
+    cmColors: DoColors;
     cmQuickHelp: ShowHelp;
     cmMainMenu: RunMenu(-1);
     cmMenuFile: RunMenu(0);
@@ -680,4 +681,133 @@ begin
     GoLine(l1);
     if bKind = bkLine then CW.col := 0 else CW.col := c1;
   end;
+end;
+
+{ ===================================================================== colours }
+
+type
+  TColorItem = record
+    name, text: string;
+    fg, bg: PByte;
+  end;
+
+var
+  ColorItems: array[0..8] of TColorItem;
+
+procedure InitColorItems;
+  procedure S(i: Integer; const n, t: string; f, b: PByte);
+  begin
+    ColorItems[i].name := n; ColorItems[i].text := t; ColorItems[i].fg := f; ColorItems[i].bg := b;
+  end;
+begin
+  S(0, 'text', 'Text area', @cTextFg, @cTextBg);
+  S(1, 'block', 'Marked block', @cBlockFg, @cBlockBg);
+  S(2, 'status', 'Status line', @cStatFg, @cStatBg);
+  S(3, 'statusoff', 'Other status lines', @cStatOffFg, @cStatOffBg);
+  S(4, 'menu', 'Menus', @cMenuFg, @cMenuBg);
+  S(5, 'menuselect', 'Selected menu item', @cMenuSelFg, @cMenuSelBg);
+  S(6, 'box', 'Prompt boxes', @cBoxFg, @cBoxBg);
+  S(7, 'message', 'Messages', @cMsgFg, @cMsgBg);
+  S(8, 'menuhot', 'Menu hot letter', @cHotFg, nil);
+end;
+
+{ Write the colours into mkedit.cfg, replacing existing color_ lines and keeping everything else. }
+procedure TApp.SaveColors;
+var
+  fn, key, line: string;
+  sl: TStringList;
+  i, j, p: Integer;
+  done: Boolean;
+begin
+  fn := ConfigDir + 'mkedit.cfg';
+  sl := TStringList.Create;
+  try
+    try
+      ForceDirectories(ConfigDir);
+      if FileExists(fn) then sl.LoadFromFile(fn);
+      for i := 0 to High(ColorItems) do begin
+        key := 'color_' + ColorItems[i].name;
+        if ColorItems[i].bg <> nil then line := key + ' = ' + IntToStr(ColorItems[i].fg^) + ',' + IntToStr(ColorItems[i].bg^)
+        else line := key + ' = ' + IntToStr(ColorItems[i].fg^) + ',0';
+        done := False;
+        for j := 0 to sl.Count - 1 do begin
+          p := Pos('=', sl[j]);
+          if (p > 0) and (LowerCase(Trim(Copy(sl[j], 1, p - 1))) = key) then begin
+            sl[j] := line; done := True; Break;
+          end;
+        end;
+        if not done then sl.Add(line);
+      end;
+      sl.SaveToFile(fn);
+      Msg('Colours saved to ' + fn);
+    except
+      on E: Exception do Msg('Cannot save ' + fn);
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+{ Colour editor: changes show at once on the real screen behind the box. }
+procedure TApp.DoColors;
+var
+  saved: array[0..8, 0..1] of Byte;
+  sel, i, w, h, x, y: Integer;
+  k: TKey;
+  row: string;
+  c: Char;
+begin
+  InitColorItems;
+  for i := 0 to High(ColorItems) do begin
+    saved[i, 0] := ColorItems[i].fg^;
+    if ColorItems[i].bg <> nil then saved[i, 1] := ColorItems[i].bg^;
+  end;
+  sel := 0;
+  repeat
+    DrawAll;
+    w := Min(ScrW, 66);
+    h := Length(ColorItems) + 5;
+    x := (ScrW - w) div 2;
+    y := Max(0, (ScrH - h) div 2);
+    ScrBox(x, y, w, h, cBoxFg, cBoxBg, False);
+    ScrPutsN(x + 2, y, ' Colors ', 10, cBoxFg, cBoxBg);
+    for i := 0 to High(ColorItems) do begin
+      if i = sel then ScrPutsN(x + 1, y + 1 + i, '>', 1, 15, cBoxBg);
+      ScrPutsN(x + 3, y + 1 + i, ColorItems[i].text, 20, cBoxFg, cBoxBg);
+      row := 'fg ' + Format('%2d', [ColorItems[i].fg^]);
+      if ColorItems[i].bg <> nil then row := row + '  bg ' + IntToStr(ColorItems[i].bg^);
+      ScrPutsN(x + 24, y + 1 + i, row, 14, cBoxFg, cBoxBg);
+      if ColorItems[i].bg <> nil then
+        ScrPutsN(x + 40, y + 1 + i, ' Sample text ', 13, ColorItems[i].fg^, ColorItems[i].bg^)
+      else
+        ScrPutsN(x + 40, y + 1 + i, ' Sample ', 8, ColorItems[i].fg^, cMenuBg);
+    end;
+    ScrPutsN(x + 2, y + h - 3, 'Up/Down item   Left/Right foreground', w - 4, cBoxFg, cBoxBg);
+    ScrPutsN(x + 2, y + h - 2, 'PgUp/PgDn background   S save   Enter keep   Esc cancel', w - 4, cBoxFg, cBoxBg);
+    ScrHideCursor;
+    ScrFlush;
+    k := GetKey;
+    case k.code of
+      kcUp: sel := (sel + High(ColorItems)) mod Length(ColorItems);
+      kcDown: sel := (sel + 1) mod Length(ColorItems);
+      kcLeft: ColorItems[sel].fg^ := (ColorItems[sel].fg^ + 15) mod 16;
+      kcRight: ColorItems[sel].fg^ := (ColorItems[sel].fg^ + 1) mod 16;
+      kcPgUp: if ColorItems[sel].bg <> nil then ColorItems[sel].bg^ := (ColorItems[sel].bg^ + 7) mod 8;
+      kcPgDn: if ColorItems[sel].bg <> nil then ColorItems[sel].bg^ := (ColorItems[sel].bg^ + 1) mod 8;
+      kcEnter: Break;
+      kcEsc: begin
+        for i := 0 to High(ColorItems) do begin
+          ColorItems[i].fg^ := saved[i, 0];
+          if ColorItems[i].bg <> nil then ColorItems[i].bg^ := saved[i, 1];
+        end;
+        Break;
+      end;
+      kcChar: begin
+        if (k.mods = []) and (Length(k.ch) = 1) then begin
+          c := UpCase(k.ch[1]);
+          if c = 'S' then begin SaveColors; Break; end;
+        end;
+      end;
+    end;
+  until False;
 end;

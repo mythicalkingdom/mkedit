@@ -116,7 +116,13 @@ begin
     ttl := 'Options [IWBN] (Ignore, Words, Backward, No Ask) <Esc = Abort>';
   end else
     ttl := 'Options [IWB] (Ignore, Words, Backward) <Esc = Abort>';
-  if not Prompt(ttl, fOpts, o) then Exit;
+  if replace then begin
+    if not Prompt(ttl, fOptsR, o) then Exit;
+    fOptsR := UpperCase(o);
+  end else begin
+    if not Prompt(ttl, fOptsF, o) then Exit;
+    fOptsF := UpperCase(o);
+  end;
   fFind := pat;
   fRepl := repl;
   fOpts := UpperCase(o);
@@ -129,6 +135,7 @@ begin
       SavePrev;
       GoLine(ln);
       CW.col := ColOfIdx(CD.Get(ln), idx, TabStop);
+      hlLine := ln; hlCol := CW.col; hlLen := ColOfIdx(CD.Get(ln), idx + Length(pat), TabStop) - CW.col;
     end else begin
       GoLine(origLine);
       CW.col := origCol;
@@ -149,10 +156,12 @@ begin
     s := CurText;
     CW.col := ColOfIdx(s, idx, TabStop);
     if not global then begin
+      hlLine := ln; hlCol := CW.col; hlLen := ColOfIdx(s, idx + Length(pat), TabStop) - CW.col;
       c := AskKey('Replace (Yes/No/Only/Global/Quit):', 'YNOGQ');
       case c of
-        'Y': ;
+        'Y': hlLen := 0;
         'N': begin
+          hlLen := 0;
           if fwd then CW.col := ColOfIdx(s, CharNext(s, idx), TabStop);
           Continue;
         end;
@@ -202,5 +211,6 @@ begin
     SavePrev;
     GoLine(ln);
     CW.col := ColOfIdx(CD.Get(ln), idx, TabStop);
+    hlLine := ln; hlCol := CW.col; hlLen := ColOfIdx(CD.Get(ln), idx + Length(fFind), TabStop) - CW.col;
   end else if msgText = '' then Msg('Not found');
 end;

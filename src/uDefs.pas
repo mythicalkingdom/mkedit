@@ -42,7 +42,7 @@ type
     cmToggleBakups, cmToggleBoxDraw, cmToggleEnterMatching, cmToggleIndent, cmToggleInsert,
     cmToggleSmartTabs, cmToggleTabsExpand, cmToggleTabsOut, cmToggleWordwrap,
     { other }
-    cmDos, cmMainMenu, cmCurrentFilename, cmInsertDate, cmInsertTime, cmMatch, cmQuickHelp, cmSetRmargin, cmShell,
+    cmDos, cmMainMenu, cmCurrentFilename, cmColors, cmInsertDate, cmInsertTime, cmMatch, cmQuickHelp, cmSetRmargin, cmShell,
     cmUndoCursorline, cmWrapPara,
     { open a particular pull-down menu directly (Alt-F, Alt-Q, Alt-P) }
     cmMenuFile, cmMenuQuit, cmMenuPrint
@@ -71,7 +71,7 @@ const
     'Find', 'FindReplace', 'RepeatFind',
     'ToggleBakups', 'ToggleBoxDraw', 'ToggleEnterMatching', 'ToggleIndent', 'ToggleInsert',
     'ToggleSmartTabs', 'ToggleTabsExpand', 'ToggleTabsOut', 'ToggleWordwrap',
-    'Dos', 'MainMenu', 'CurrentFilename', 'InsertDate', 'InsertTime', 'Match', 'QuickHelp', 'SetRmargin', 'Shell',
+    'Dos', 'MainMenu', 'CurrentFilename', 'Colors', 'InsertDate', 'InsertTime', 'Match', 'QuickHelp', 'SetRmargin', 'Shell',
     'UndoCursorline', 'WrapPara',
     'MenuFile', 'MenuQuit', 'MenuPrint'
   );
@@ -378,6 +378,7 @@ initialization
   AddItem('U', 'Tabs out', cmToggleTabsOut);
   AddItem('P', 'Physical tab width', cmSetPtabwidth);
   AddItem('C', 'C tab width', cmSetCtabwidth);
+  AddItem('L', 'Colors', cmColors);
   AddItem('H', 'Help', cmQuickHelp);
   AddMenu('Macro', 'M');
   AddItem('M', 'Record macro', cmMacroRecord);
