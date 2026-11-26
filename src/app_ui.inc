@@ -296,9 +296,9 @@ type
   end;
 
 const
-  HelpCats: array[0..10] of THelpCat = (
+  HelpCats: array[0..11] of THelpCat = (
     (title: 'Cursor movement'; first: cmBegFile; last: cmWordRight),
-    (title: 'Editing'; first: cmAddLine; last: cmUnKill),
+    (title: 'Editing'; first: cmAddLine; last: cmRedo),
     (title: 'Blocks and buffers'; first: cmAppendScrbuff; last: cmUnmarkBlock),
     (title: 'Files'; first: cmChangeFilename; last: cmWriteBlock),
     (title: 'Windows'; first: cmCloseWindow; last: cmZoomWindow),
@@ -307,7 +307,8 @@ const
     (title: 'Tabs'; first: cmSetCtabwidth; last: cmTabRt),
     (title: 'Find and replace'; first: cmFind; last: cmRepeatFind),
     (title: 'Modes'; first: cmToggleBakups; last: cmToggleWordwrap),
-    (title: 'Other'; first: cmDos; last: cmMenuPrint));
+    (title: 'Other'; first: cmDos; last: cmMenuPrint),
+    (title: 'Programming'; first: cmCompile; last: cmTag));
 
 { The help screen scrolls: on a wide terminal the QEdit style overview comes first, then every
   command with all its keys (as currently bound) and its menu path. }
@@ -565,6 +566,15 @@ end;
 
 { ===================================================================== command dispatch }
 
+function MenuIdx(hot: Char): Integer;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Menus) do
+    if Menus[i].hot = hot then Exit(i);
+  Result := 0;
+end;
+
 procedure TApp.Execute(cmd: TCmd);
 var
   v: Integer;
@@ -641,6 +651,16 @@ begin
     cmTabRt: DoTab(True);
     cmTabLt: DoTab(False);
     cmWrapPara: DoWrapPara;
+    cmCenterLine: DoCenterLine;
+    cmFilterBlock: DoFilterBlock;
+    cmNotModified: begin CD.MarkSaved; CD.Modified := False; Msg('File marked as not modified'); end;
+    cmUndo: DoUndoRedo(False);
+    cmRedo: DoUndoRedo(True);
+    cmCompile: DoCompile;
+    cmGrepFind: DoGrep;
+    cmNextError: DoNextError(1);
+    cmPrevError: DoNextError(-1);
+    cmTag: DoTag;
     cmCurrentFilename: TypeText(CD.Name);
     cmInsertDate: TypeText(FormatDateTime('yyyy-mm-dd hh:nn', Now));
     cmInsertTime: TypeText(FormatDateTime('hh:nn:ss', Now));
@@ -728,9 +748,9 @@ begin
     cmColors: DoColors;
     cmQuickHelp: ShowHelp;
     cmMainMenu: RunMenu(-1);
-    cmMenuFile: RunMenu(0);
-    cmMenuPrint: RunMenu(7);
-    cmMenuQuit: RunMenu(8);
+    cmMenuFile: RunMenu(MenuIdx('F'));
+    cmMenuPrint: RunMenu(MenuIdx('P'));
+    cmMenuQuit: RunMenu(MenuIdx('Q'));
   end;
 end;
 

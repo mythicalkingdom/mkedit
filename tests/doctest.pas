@@ -139,6 +139,100 @@ begin
   DeleteFile(fn);
 end;
 
+{ Undo/redo: every command is one step; walking back and forth must reproduce each earlier state. }
+procedure RunUndoCase(const label_: string; nLines, nOps: Integer);
+var
+  fn: string;
+  model: TStringList;
+  states: array of TStringList;
+  d: TDoc;
+  i, op, depth, k, nl: Integer;
+  cur: Int64;
+  l: Int64;
+  c: Integer;
+  s: string;
+
+  function Snap: TStringList;
+  begin
+    Result := TStringList.Create;
+    Result.Assign(model);
+  end;
+
+  procedure CheckState(idx: Integer; const what: string);
+  var
+    j: Integer;
+    n: Int64;
+  begin
+    n := d.Seek(High(Int32));
+    if d.LastLine + 1 <> states[idx].Count then begin
+      Check(False, label_ + ': ' + what + ': line count ' + IntToStr(d.LastLine + 1) + ' want ' + IntToStr(states[idx].Count));
+      Exit;
+    end;
+    for j := 0 to states[idx].Count - 1 do begin
+      d.Seek(j);
+      if d.Get(j) <> states[idx][j] then begin
+        Check(False, label_ + ': ' + what + ': line ' + IntToStr(j) + ' differs');
+        Exit;
+      end;
+    end;
+  end;
+
+begin
+  fn := GetEnvironmentVariable('DOCTEST_FILE');
+  model := TStringList.Create;
+  for i := 0 to nLines - 1 do model.Add(RandLine(i));
+  WriteModel(fn, model, False, True);
+  d := TDoc.Create(fn, False, 8);
+  SetLength(states, nOps + 1);
+  states[0] := Snap;
+  depth := 0;
+  for op := 1 to nOps do begin
+    cur := Random(model.Count);
+    d.Seek(cur);
+    Inc(UndoSerial);
+    d.SetStep(cur, 0, -1);
+    case Random(4) of
+      0: begin s := RandLine(op); d.SetLine(cur, s); model[cur] := s; end;
+      1: begin s := RandLine(op); d.InsertLine(cur, s); model.Insert(cur, s); end;
+      2: if model.Count > 1 then begin d.DeleteLine(cur); model.Delete(cur); end
+         else begin s := RandLine(op); d.SetLine(cur, s); model[cur] := s; end;
+    else
+      { several edits in one step }
+      for k := 1 to 3 do begin
+        nl := Random(model.Count);
+        d.Seek(nl);
+        s := RandLine(op + k);
+        if Random(2) = 0 then begin d.InsertLine(nl, s); model.Insert(nl, s); end
+        else if model.Count > 1 then begin d.DeleteLine(nl); model.Delete(nl); end;
+      end;
+    end;
+    states[op] := Snap;
+    Inc(depth);
+  end;
+  CheckState(depth, 'after edits');
+  for i := 1 to 400 do begin
+    if (Random(2) = 0) and (d.UndoCount > 0) then begin
+      Check(d.Undo(l, c), label_ + ': undo failed');
+      Dec(depth);
+    end else if d.RedoCount > 0 then begin
+      Check(d.Redo(l, c), label_ + ': redo failed');
+      Inc(depth);
+    end;
+    if (i mod 7) = 0 then CheckState(depth, 'walk step ' + IntToStr(i));
+  end;
+  { undo everything, then redo everything }
+  while d.UndoCount > 0 do begin d.Undo(l, c); Dec(depth); end;
+  CheckState(0, 'fully undone');
+  Check(not d.Modified, label_ + ': fully undone document should be unmodified');
+  while d.RedoCount > 0 do begin d.Redo(l, c); Inc(depth); end;
+  CheckState(nOps, 'fully redone');
+  Check(d.Modified, label_ + ': redone document should be modified');
+  d.Free;
+  for i := 0 to High(states) do states[i].Free;
+  model.Free;
+  DeleteFile(fn);
+end;
+
 begin
   Randomize;
   RandSeed := 12345;
@@ -148,5 +242,8 @@ begin
   RunCase('small', 30, 300, False, True);
   RunCase('tiny', 1, 100, False, True);
   RunCase('mid', 1500, 1500, False, True);
+  RunUndoCase('undo small', 60, 150);
+  RunUndoCase('undo tiny', 1, 80);
+  RunUndoCase('undo big', 20000, 120);
   if fails = 0 then WriteLn('doctest: all passed') else begin WriteLn('doctest: ', fails, ' failures'); Halt(1); end;
 end.

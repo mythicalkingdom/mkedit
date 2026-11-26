@@ -843,3 +843,102 @@ begin
     CW.top := 0;
   end;
 end;
+
+{ Center the cursor line between column 1 and the right margin. }
+procedure TApp.DoCenterLine;
+var
+  t: string;
+  pad: Integer;
+begin
+  t := Trim(CurText);
+  if t = '' then Exit;
+  pad := (rmargin - Utf8Len(t)) div 2;
+  if pad < 0 then pad := 0;
+  SetCurText(Blanks(pad) + t);
+  CW.col := 0;
+end;
+
+{ Pipe the marked block through a shell command and put the output in its place (JOE's ^K /). }
+procedure TApp.DoFilterBlock;
+var
+  l1, l2: Int64;
+  c1, c2, i, rc: Integer;
+  cmd, tin, tout, content: string;
+  sc, res: TScrap;
+  f: TFileStream;
+  p, q: Integer;
+  wasAll: Boolean;
+  kind: TBlockKind;
+begin
+  if not BlockRange(l1, c1, l2, c2) then begin Msg('No block marked'); Exit; end;
+  if bDoc <> CD then begin Msg('The block is in another file'); Exit; end;
+  if not Prompt('Filter block through command: <Esc = abort>', '', cmd) then Exit;
+  if Trim(cmd) = '' then Exit;
+  kind := bKind;
+  sc := ExtractBlock(CD, kind, l1, c1, l2, c2);
+  tin := GetTempFileName('', 'mkedit-filter-');
+  tout := tin + '.out';
+  res := TScrap.Create;
+  try
+    try
+      f := TFileStream.Create(tin, fmCreate);
+      try
+        for i := 0 to sc.lines.Count - 1 do begin
+          content := sc.lines[i] + #10;
+          f.WriteBuffer(content[1], Length(content));
+        end;
+      finally
+        f.Free;
+      end;
+    except
+      on E: Exception do begin Msg('Cannot write a temporary file'); Exit; end;
+    end;
+    rc := fpSystem('(' + cmd + ') < "' + tin + '" > "' + tout + '" 2>&1');
+    if (rc <> 0) or (not FileExists(tout)) then begin
+      Msg('The command failed (status ' + IntToStr(rc) + '); the block is unchanged');
+      Exit;
+    end;
+    f := TFileStream.Create(tout, fmOpenRead);
+    try
+      SetLength(content, f.Size);
+      if f.Size > 0 then f.ReadBuffer(content[1], f.Size);
+    finally
+      f.Free;
+    end;
+    res.kind := kind;
+    p := 1;
+    while p <= Length(content) do begin
+      q := p;
+      while (q <= Length(content)) and (content[q] <> #10) do Inc(q);
+      res.lines.Add(Copy(content, p, q - p));
+      p := q + 1;
+    end;
+    if (kind = bkStream) and (res.lines.Count = 0) then res.lines.Add('');
+    CD.Seek(l2);
+    wasAll := (kind = bkLine) and (l1 = 0) and CD.LastLineKnown and (l2 = CD.LastLine);
+    RemoveBlock(CD, kind, l1, c1, l2, c2);
+    if kind = bkLine then begin
+      for i := 0 to res.lines.Count - 1 do begin
+        CD.Seek(l1 + i);
+        CD.InsertLine(l1 + i, res.lines[i]);
+      end;
+      if wasAll and (res.lines.Count > 0) then begin
+        { the whole file was replaced: drop the empty line the removal left behind }
+        CD.Seek(l1 + res.lines.Count);
+        if CD.Get(l1 + res.lines.Count) = '' then CD.DeleteLine(l1 + res.lines.Count);
+      end;
+    end else begin
+      InsertScrap(CD, res, l1, c1, False, l2, i);
+    end;
+    ClearBlock;
+    CW.line := l1;
+    CW.col := 0;
+    GoLine(CW.line);
+    Msg('Block filtered through ' + cmd);
+  finally
+    DeleteFile(tin);
+    DeleteFile(tout);
+    sc.Free;
+    res.Free;
+  end;
+end;

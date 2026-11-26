@@ -71,6 +71,24 @@ type
 
   PInt64 = ^Int64;
 
+  { One undo step: every line edit made by one command (or one run of typing). }
+  TUndoEntry = record
+    kind: Byte;                { 0 = line replaced, 1 = line inserted, 2 = line deleted }
+    line: Int64;
+    oldText, newText: string;
+  end;
+
+  TUndoGroup = class
+    entries: array of TUndoEntry;
+    n: Integer;
+    serial: Integer;
+    beforeLine, afterLine: Int64;
+    beforeCol, afterCol: Integer;
+    mergeKey: Int64;           { typing on this line may be merged into the group }
+    canMerge: Boolean;
+    bytes: Int64;
+  end;
+
   TDoc = class
   private
     FLines: TStringList;
@@ -79,6 +97,19 @@ type
     head, tail: TChunkStack;
     src: TSrcReader;
     anchors: array of PInt64;
+    FUndo, FRedo: TList;
+    FReplay: Boolean;
+    FUndoBytes: Int64;
+    FSavedTop: TUndoGroup;
+    FStepLine: Int64;
+    FStepCol: Integer;
+    FStepKey: Int64;
+    FStepSerial: Integer;
+    procedure LogEntry(kind: Byte; line: Int64; const oldText, newText: string);
+    procedure TrimUndo;
+    procedure FreeGroups(l: TList);
+    procedure Apply(g: TUndoGroup; undo: Boolean);
+    function TopUndo: TUndoGroup;
     procedure AddBytes(n: Int64);
     function ReadMore: Boolean;
     function PopHead: Boolean;
@@ -119,7 +150,21 @@ type
     procedure AddAnchor(p: PInt64);
     procedure RemoveAnchor(p: PInt64);
     function Save(const dest: string; backup, tabsOut: Boolean; out err: string): Boolean;
+    { Undo/redo. The application calls SetStep at the start of each command (cursor before it, and a
+      key: typing on the same line merges into one step) and EndStep after it. }
+    procedure SetStep(line: Int64; col: Integer; mergeKey: Int64);
+    procedure EndStep(line: Int64; col: Integer);
+    function Undo(out line: Int64; out col: Integer): Boolean;
+    function Redo(out line: Int64; out col: Integer): Boolean;
+    function UndoCount: Integer;
+    function RedoCount: Integer;
+    procedure MarkSaved;
+    procedure ClearUndo;
   end;
+
+var
+  { bumped by the application for every command; edits with the same serial form one undo step }
+  UndoSerial: Integer = 0;
 
 function SplitLinesRaw(const raw: string; dst: TStrings): Integer;
 
@@ -357,6 +402,8 @@ begin
   ExpandOnLoad := AExpandTabs;
   TabW := ATabW;
   FLines := TStringList.Create;
+  FUndo := TList.Create;
+  FRedo := TList.Create;
   head := TChunkStack.Create;
   tail := TChunkStack.Create;
   FFirst := 0;
@@ -395,6 +442,10 @@ end;
 
 destructor TDoc.Destroy;
 begin
+  FreeGroups(FUndo);
+  FreeGroups(FRedo);
+  FUndo.Free;
+  FRedo.Free;
   FLines.Free;
   head.Free;
   tail.Free;
@@ -653,6 +704,7 @@ var
 begin
   if not InBuf(line) then Exit;
   i := line - FFirst;
+  if not FReplay then LogEntry(0, line, FLines[i], s);
   Inc(FBytes, Length(s) - Length(FLines[i]));
   FLines[i] := s;
   Modified := True;
@@ -664,6 +716,7 @@ var
 begin
   if line < FFirst then line := FFirst;
   if line > FFirst + FLines.Count then line := FFirst + FLines.Count;
+  if not FReplay then LogEntry(1, line, '', s);
   FLines.Insert(line - FFirst, s);
   Inc(FBytes, Length(s) + 1);
   for i := 0 to High(anchors) do
@@ -676,6 +729,7 @@ var
   i: Integer;
 begin
   if not InBuf(line) then Exit;
+  if not FReplay then LogEntry(2, line, FLines[line - FFirst], '');
   Dec(FBytes, Length(FLines[line - FFirst]) + 1);
   FLines.Delete(line - FFirst);
   for i := 0 to High(anchors) do
@@ -685,9 +739,199 @@ begin
     { the window ran dry: refill from either side, or leave one empty line if the file is empty }
     if not ReadMore then begin
       if (head.cnt > 0) and PopHead then begin end
-      else begin FLines.Add(''); Inc(FBytes); end;
+      else if not FReplay then begin
+        { the only line went: an empty file keeps one empty line (logged, so undo can restore it) }
+        FLines.Add('');
+        Inc(FBytes);
+        LogEntry(1, line, '', '');
+      end;
     end;
   end;
+end;
+
+{ ------------------------------------------------------------ undo / redo }
+
+procedure TDoc.FreeGroups(l: TList);
+var
+  i: Integer;
+begin
+  for i := 0 to l.Count - 1 do TUndoGroup(l[i]).Free;
+  l.Clear;
+end;
+
+function TDoc.TopUndo: TUndoGroup;
+begin
+  if FUndo.Count = 0 then Result := nil else Result := TUndoGroup(FUndo[FUndo.Count - 1]);
+end;
+
+function TDoc.UndoCount: Integer;
+begin
+  Result := FUndo.Count;
+end;
+
+function TDoc.RedoCount: Integer;
+begin
+  Result := FRedo.Count;
+end;
+
+procedure TDoc.SetStep(line: Int64; col: Integer; mergeKey: Int64);
+begin
+  FStepLine := line;
+  FStepCol := col;
+  FStepKey := mergeKey;
+  FStepSerial := UndoSerial;
+end;
+
+procedure TDoc.EndStep(line: Int64; col: Integer);
+var
+  g: TUndoGroup;
+begin
+  g := TopUndo;
+  if (g <> nil) and (g.serial = UndoSerial) then begin
+    g.afterLine := line;
+    g.afterCol := col;
+  end;
+end;
+
+procedure TDoc.ClearUndo;
+begin
+  FreeGroups(FUndo);
+  FreeGroups(FRedo);
+  FUndoBytes := 0;
+  FSavedTop := nil;
+end;
+
+procedure TDoc.MarkSaved;
+var
+  g: TUndoGroup;
+begin
+  g := TopUndo;
+  if g <> nil then g.canMerge := False;      { later typing must not change the saved state }
+  FSavedTop := g;
+end;
+
+{ Keep the log within bounds: drop the oldest steps. }
+procedure TDoc.TrimUndo;
+var
+  g: TUndoGroup;
+begin
+  while (FUndoBytes > 64 * 1024 * 1024) or (FUndo.Count > 100000) do begin
+    g := TUndoGroup(FUndo[0]);
+    if g = FSavedTop then FSavedTop := nil;
+    Dec(FUndoBytes, g.bytes);
+    FUndo.Delete(0);
+    g.Free;
+  end;
+end;
+
+procedure TDoc.LogEntry(kind: Byte; line: Int64; const oldText, newText: string);
+var
+  g: TUndoGroup;
+  e: TUndoEntry;
+  sz: Int64;
+begin
+  if FRedo.Count > 0 then FreeGroups(FRedo);
+  g := TopUndo;
+  if not ((g <> nil) and (g.serial = UndoSerial)) then begin
+    { a new command: merge plain typing on the same line into the previous step, else start a step }
+    if (g <> nil) and (FStepSerial = UndoSerial) and (FStepKey >= 0) and g.canMerge and
+       (g.mergeKey = FStepKey) and (g.afterLine = FStepLine) and (g.afterCol = FStepCol) and (g.n < 64) then
+      g.serial := UndoSerial
+    else begin
+      g := TUndoGroup.Create;
+      g.serial := UndoSerial;
+      if FStepSerial = UndoSerial then begin
+        g.beforeLine := FStepLine; g.beforeCol := FStepCol; g.mergeKey := FStepKey;
+      end else begin
+        g.beforeLine := line; g.beforeCol := 0; g.mergeKey := -1;
+      end;
+      g.afterLine := g.beforeLine; g.afterCol := g.beforeCol;
+      g.canMerge := g.mergeKey >= 0;
+      FUndo.Add(g);
+    end;
+  end;
+  if (kind <> 0) or (line <> g.mergeKey) then g.canMerge := False;
+  e.kind := kind; e.line := line; e.oldText := oldText; e.newText := newText;
+  if g.n >= Length(g.entries) then SetLength(g.entries, g.n * 2 + 4);
+  g.entries[g.n] := e;
+  Inc(g.n);
+  sz := Length(oldText) + Length(newText) + 48;
+  Inc(g.bytes, sz);
+  Inc(FUndoBytes, sz);
+  TrimUndo;
+end;
+
+procedure TDoc.Apply(g: TUndoGroup; undo: Boolean);
+var
+  i: Integer;
+  e: TUndoEntry;
+begin
+  FReplay := True;
+  try
+    if undo then begin
+      for i := g.n - 1 downto 0 do begin
+        e := g.entries[i];
+        case e.kind of
+          0: begin Seek(e.line); SetLine(e.line, e.oldText); end;
+          1: begin Seek(e.line); DeleteLine(e.line); end;
+          2: begin
+            if e.line > 0 then Seek(e.line - 1) else Seek(0);
+            InsertLine(e.line, e.oldText);
+          end;
+        end;
+      end;
+    end else begin
+      for i := 0 to g.n - 1 do begin
+        e := g.entries[i];
+        case e.kind of
+          0: begin Seek(e.line); SetLine(e.line, e.newText); end;
+          1: begin
+            if e.line > 0 then Seek(e.line - 1) else Seek(0);
+            InsertLine(e.line, e.newText);
+          end;
+          2: begin Seek(e.line); DeleteLine(e.line); end;
+        end;
+      end;
+    end;
+  finally
+    FReplay := False;
+  end;
+  if FLines.Count = 0 then begin FLines.Add(''); Inc(FBytes); end;
+end;
+
+function TDoc.Undo(out line: Int64; out col: Integer): Boolean;
+var
+  g: TUndoGroup;
+begin
+  Result := False;
+  g := TopUndo;
+  if g = nil then Exit;
+  FUndo.Delete(FUndo.Count - 1);
+  Dec(FUndoBytes, g.bytes);
+  Apply(g, True);
+  g.canMerge := False;
+  FRedo.Add(g);
+  line := g.beforeLine;
+  col := g.beforeCol;
+  Modified := TopUndo <> FSavedTop;
+  Result := True;
+end;
+
+function TDoc.Redo(out line: Int64; out col: Integer): Boolean;
+var
+  g: TUndoGroup;
+begin
+  Result := False;
+  if FRedo.Count = 0 then Exit;
+  g := TUndoGroup(FRedo[FRedo.Count - 1]);
+  FRedo.Delete(FRedo.Count - 1);
+  Apply(g, False);
+  FUndo.Add(g);
+  Inc(FUndoBytes, g.bytes);
+  line := g.afterLine;
+  col := g.afterCol;
+  Modified := TopUndo <> FSavedTop;
+  Result := True;
 end;
 
 procedure TDoc.AddAnchor(p: PInt64);
@@ -845,6 +1089,7 @@ begin
   Name := dest;
   Modified := False;
   NewFile := False;
+  MarkSaved;
   Result := True;
 end;
 

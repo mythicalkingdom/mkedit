@@ -50,6 +50,25 @@ The QEdit help screen's keys are all there (`@` = Alt, `^` = Ctrl, `#` = Shift):
 | modes | `Ins`, `^QI` auto indent, `^OW` word wrap, `^OR` right margin, `#F1` box drawing, `^QT` smart tabs, `@V` tab expansion, `@I` tabs out; `Esc O E` enter matching |
 | menus | `Esc`, then the capital letter of the menu and of the item (`Esc F S` saves); `@F`, `@Q`, `@P` open File/Quit/Print directly |
 
+Keys borrowed from the Unix editor **JOE** where mkedit had none: `^K L` goto line, `^K U` beginning of
+file, `^K -` previous position, `^K M` move block, `^K O/G/T/I` split/grow/shrink/zoom window, `^K A` center
+line, `^K J` format paragraph, `^K , / ^K .` shift block, `^K /` filter the block through a shell command
+(`sort`...), `^K [ / ^K ]` macro record, `^K !` run a command, `^K '` shell, `^K < / ^K >` pan, `^]` split line,
+`Ctrl-Space` start marking, `Ctrl-Del` delete block, `Esc ~` mark file unmodified. JOE keys that clash with
+QEdit's (`^K Z`, `^U`, `^V`, `^W`, `^A`, `^E` ...) keep their QEdit meaning.
+
+**Undo / redo**: `Alt-/` or `^Q U` undoes, `Ctrl-^` or `Alt-?` redoes (Edit menu: `Esc E Z`, `Esc E R`). Every command is
+one step; typing on one line merges into a single step; Replace-all, block moves and the like undo in one go.
+The log is kept per file in memory (64 MB, oldest steps dropped), works anywhere in a huge file, and undoing back to
+the saved state clears the `*` marker. (`Ctrl-_` keeps QEdit's GetPrev, which is why JOE's undo key is not used.)
+
+**Programmer tools** (from JOE; menu `Esc T`): `F10` Compile runs a build command (default `make`, asks to save modified
+files) into a `* Build Log *` window and jumps to the first error; `Shift-F10` greps the tree (`grep -rn`, sorted) into
+`* Grep Log *`; `Alt-=` / `Alt--` go to the next / previous error or match, in the window above the log. Error lines
+are recognised in gcc/clang/go/rustc/grep (`file:line:col:`), Free Pascal (`file(line,col)`) and Python
+(`File "x", line N`) form. `^K ;` looks a name up in the nearest `tags` file (ctags). Not done from JOE: the
+in-editor shell window and incremental search.
+
 Things a terminal cannot do, and what replaces them: **Ctrl-M is Enter**, so macro recording is
 `F12` (or `^OM`); *ExecuteScrap* (Ctrl-Enter) is `F11`. Alt+key is Esc+key, so some terminals need
 "Alt sends Escape" turned on. Shift/Ctrl/Alt with F-keys and arrows use xterm sequences.
@@ -58,6 +77,10 @@ Macros are keystrokes: `F12`, press the key to assign (an unassigned key; Enter 
 keys, `F12` again. `Esc M W` / `Esc M R` save and load macro files (plain text).
 
 ## Configuration
+
+`mkedit.cfg` in this repository is the default configuration with every setting documented; copy it to
+`~/.config/mkedit/mkedit.cfg`. Its last section lists the JOE keys that clash with mkedit's, each as a commented-out
+`key` line with an explanation, so you can switch on just the ones you want.
 
 Colours can be edited live: `Esc O L` (Options, Colors) lets you pick an item, change foreground (Left/Right) and
 background (PgUp/PgDn) with the result showing at once, `S` to save them into the config file, Esc to cancel.

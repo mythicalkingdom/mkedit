@@ -76,6 +76,14 @@ var
 begin
   Result := False;
   if d = CD then TrimEdited(-1);
+  if Info(d).scratch then begin
+    if not Prompt('Save log as: <Esc = abort>', '', fn) then Exit;
+    fn := Trim(fn);
+    if fn = '' then Exit;
+    d.Name := ExpandFileName(ExpandHome(fn));
+    Info(d).scratch := False;
+    d.NewFile := True;
+  end;
   if d.Name = '' then begin
     if not Prompt('Save as: <Esc = abort>', '', fn) then Exit;
     fn := Trim(fn);
@@ -107,6 +115,9 @@ var
   ph: TDoc;
 begin
   if bDoc = d then ClearBlock;
+  if buildDoc = d then buildDoc := nil;
+  if grepDoc = d then grepDoc := nil;
+  if errDoc = d then errDoc := nil;
   idx := DocIndex(d);
   if idx < 0 then Exit;
   if docs.Count = 1 then begin

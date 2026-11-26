@@ -24,6 +24,8 @@ F1, F2, F3, F4 = "\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS"
 F5, F6, F7, F8, F9 = "\x1b[15~", "\x1b[17~", "\x1b[18~", "\x1b[19~", "\x1b[20~"
 F11, F12 = "\x1b[23~", "\x1b[24~"
 A_F9 = "\x1b[20;3~"
+F10, S_F10 = "\x1b[21~", "\x1b[21;2~"
+UNDO, REDO = alt("/"), "\x1e"
 S_F5, S_F7, S_F8 = "\x1b[15;2~", "\x1b[18;2~", "\x1b[19;2~"
 A_F2, A_F3 = "\x1b[1;3Q", "\x1b[1;3R"
 BS, ENTER, TAB, S_TAB = "\x7f", "\r", "\t", "\x1b[Z"
@@ -1174,6 +1176,376 @@ def find_and_replace_default_options_configurable(env):
     rows = s.rows_text()
     i = [k for k, r in enumerate(rows) if "Options [IWB]" in r][0]
     eq(rows[i + 1].strip("│ ").strip(), "W", "the configured default find options")
+
+# ------------------------------------------------------------------ keys borrowed from JOE
+@test
+def joe_goto_line_and_begin_of_file(env):
+    env.write("a.txt", "".join("line%d\n" % i for i in range(1, 100)))
+    s = env.start("a.txt")
+    s.send(ctrl("k") + "l", 0.3); s.send("42\r", 0.3)
+    eq(s.line_no(), 42)
+    s.send(ctrl("k") + "u", 0.3)
+    eq(s.line_no(), 1)
+    s.send(ctrl("k") + "-", 0.3)
+    eq(s.line_no(), 42)
+
+@test
+def joe_move_block_and_indent(env):
+    s, t = edit(env, "a\nb\nc\nd\n", alt("l"), alt("l"), DOWN, DOWN, ctrl("k") + "m")
+    eq(t, "b\nc\na\nd\n")
+    s, t = edit(env, "a\nb\n", alt("l"), ctrl("k") + ".", ctrl("k") + ".", ctrl("k") + ",", name="b.txt")
+    eq(t, " a\nb\n")
+
+@test
+def joe_center_line(env):
+    s, t = edit(env, "  hello  \n", ctrl("k") + "a")
+    eq(t, " " * 35 + "hello\n")
+
+@test
+def joe_filter_block_through_command(env):
+    s, t = edit(env, "c\na\nb\nx\n", alt("l"), DOWN, DOWN, alt("l"), ctrl("k") + "/", "sort\r")
+    eq(t, "a\nb\nc\nx\n")
+    s, t = edit(env, "b\na\n", alt("l"), DOWN, alt("l"), ctrl("k") + "/", "sort\r", name="b.txt")
+    eq(t, "a\nb\n")
+    s, t = edit(env, "keep\nb\n", alt("l"), ctrl("k") + "/", "false\r", name="c.txt")
+    eq(t, "keep\nb\n")
+
+@test
+def joe_open_line_and_ctrl_space_mark(env):
+    s, t = edit(env, "abcd\n", RIGHT * 2, "\x1d", "X")      # ^] splits the line, the cursor stays
+    eq(t, "abX\ncd\n")
+    s, t = edit(env, "abcdef\n", "\x00", RIGHT * 2, "\x00", END, alt("c"), name="b.txt")
+    eq(t, "abcdefabc\n")
+
+@test
+def joe_window_keys(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(ctrl("k") + "o", 0.4)
+    eq(sum(1 for r in s.rows_text() if r.startswith("L ")), 2)
+    s.send(ctrl("k") + "i", 0.4)
+    eq(sum(1 for r in s.rows_text() if r.startswith("L ")), 1)
+
+@test
+def joe_mark_unmodified(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2)
+    assert "*" in s.row(0)
+    s.send(alt("~"), 0.3)
+    assert "*" not in s.row(0), s.row(0)
+    s.send(alt("x"), 0.4)
+    assert s.exited()
+    eq(read(env, "a.txt"), "x\n")
+
+@test
+def no_duplicate_default_key_bindings(env):
+    import re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "uDefs.pas")).read()
+    keys = re.findall(r"Bind\('((?:[^']|'')*)'", src)
+    dup = sorted({k for k in keys if keys.count(k) > 1})
+    assert not dup, dup
+
+# ------------------------------------------------------------------ undo / redo
+def saved(s, env, name="a.txt"):
+    s.send(SAVE, 0.4)
+    return read(env, name)
+
+@test
+def undo_typing_merges_into_one_step(env):
+    env.write("a.txt", "orig\n")
+    s = env.start("a.txt")
+    s.send("hello world", 0.4)
+    s.send(UNDO, 0.3)
+    eq(saved(s, env), "orig\n")
+    s.send(REDO, 0.3)
+    eq(saved(s, env), "hello worldorig\n")
+
+@test
+def undo_steps_through_enter_and_typing(env):
+    env.write("a.txt", "a\n")
+    s = env.start("a.txt")
+    s.send("xyz", 0.2); s.send(RIGHT * 0, 0.0)
+    s.send(ENTER, 0.2)
+    s.send("q", 0.2)
+    eq(saved(s, env), "xyz\nqa\n")
+    s.send(UNDO, 0.3)
+    eq(saved(s, env), "xyz\na\n")
+    s.send(UNDO, 0.3)
+    eq(saved(s, env), "xyza\n")
+    s.send(UNDO, 0.3)
+    eq(saved(s, env), "a\n")
+    s.send(UNDO, 0.3)
+    assert "Nothing to undo" in s.text(), s.text()
+    s.send(REDO + REDO + REDO, 0.5)
+    eq(saved(s, env), "xyz\nqa\n")
+
+@test
+def undo_restores_cursor_position(env):
+    env.write("a.txt", "".join("line%d\n" % i for i in range(1, 60)))
+    s = env.start("a.txt")
+    s.send(ctrl("j") + "30\r", 0.4)
+    s.send(alt("d"), 0.3)
+    s.send(ctrl("j") + "5\r", 0.4)
+    s.send(UNDO, 0.4)
+    eq(s.line_no(), 30)
+    s.send(UP, 0.3)                       # (the message line hides the last row)
+    assert "line30" in s.text(), s.text()
+
+@test
+def undo_block_delete_and_move(env):
+    s, t = edit(env, "a\nb\nc\nd\n", alt("l"), DOWN, alt("l"), alt("g"), UNDO)
+    eq(t, "a\nb\nc\nd\n")
+    s, t = edit(env, "a\nb\nc\nd\n", alt("l"), alt("l"), DOWN, DOWN, alt("m"), UNDO, name="b.txt")
+    eq(t, "a\nb\nc\nd\n")
+
+@test
+def undo_replace_all_is_one_step(env):
+    s, t = edit(env, "foo foo\nfoo\n", ctrl("q") + "a", "foo\r", "bar\r", "IN\r", UNDO)
+    eq(t, "foo foo\nfoo\n")
+
+@test
+def undo_to_saved_state_clears_modified_marker(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2)
+    s.send(SAVE, 0.4)
+    assert "*" not in s.row(0)
+    s.send("def", 0.2)
+    assert "*" in s.row(0)
+    s.send(UNDO, 0.3)
+    assert "*" not in s.row(0), s.row(0)
+    s.send(UNDO, 0.3)
+    assert "*" in s.row(0), "undone past the saved state"
+    s.send(REDO, 0.3)
+    assert "*" not in s.row(0)
+
+@test
+def new_edit_after_undo_drops_redo(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2); s.send(UNDO, 0.3); s.send("Z", 0.2)
+    s.send(REDO, 0.3)
+    assert "Nothing to redo" in s.text(), s.text()
+    eq(saved(s, env), "Zx\n")
+
+@test
+def undo_from_the_menu(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2)
+    s.send(ESC, 0.3); s.send("e", 0.3); s.send("z", 0.4)
+    eq(saved(s, env), "x\n")
+
+@test
+def undo_on_a_big_file_goes_back_to_the_edit(env):
+    n = 50000
+    env.write("big.txt", big_content(n))
+    s = env.start("big.txt")
+    s.send(ctrl("j") + "45000\r", 0.8)
+    s.send(HOME + "EDIT", 0.3)
+    s.send(C_PGUP, 0.6)
+    s.send(HOME + "TOP", 0.3)
+    s.send(UNDO, 0.8)
+    s.send(UNDO, 0.8)
+    eq(s.line_no(), 45000)
+    s.send(UNDO, 0.5)
+    s.send(SAVE, 3.0)
+    t = read(env, "big.txt")
+    eq(t, big_content(n))
+
+@test
+def undo_after_deleting_everything(env):
+    s, t = edit(env, "one\ntwo\n", alt("d"), alt("d"), UNDO)
+    eq(t, "two\n")
+    s, t = edit(env, "one\ntwo\n", alt("d"), alt("d"), UNDO, UNDO, name="b.txt")
+    eq(t, "one\ntwo\n")
+
+# ------------------------------------------------------------------ programmer tools
+def project(env):
+    env.write("x.c", "int main()\n{\n    return boom;\n}\n")
+    env.write("y.pas", "unit y;\nbegin\n  bad;\nend.\n")
+    script = env.write("build.sh", "echo 'compiling'\n"
+                       "echo 'x.c:3:12: error: boom undeclared'\n"
+                       "echo 'note: something'\n"
+                       "echo 'y.pas(3,3) Error: Identifier not found \"bad\"'\n"
+                       "exit 1\n")
+    return script
+
+@test
+def compile_shows_log_and_jumps_to_first_error(env):
+    project(env)
+    s = env.start("x.c", "y.pas")
+    s.send(F10, 0.4)
+    assert "Build command" in s.text(), s.text()
+    s.send("sh build.sh\r", 1.5)
+    t = s.text()
+    assert "* Build Log *" in t and "x.c:3:12: error" in t, t
+    # the editing window shows x.c with the cursor on the error line and column
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("x.c") and x[0] == 3 and x[1] == 12 for x in st), st
+
+@test
+def next_and_previous_error(env):
+    project(env)
+    s = env.start("x.c")
+    s.send(F10, 0.4); s.send("sh build.sh\r", 1.5)
+    s.send(alt("="), 0.6)
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("y.pas") and x[0] == 3 and x[1] == 3 for x in st), st
+    s.send(alt("="), 0.4)
+    assert "No more errors" in s.text(), s.text()
+    s.send(alt("-"), 0.6)
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("x.c") and x[0] == 3 for x in st), st
+
+@test
+def compile_without_errors_reports_success(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(F10, 0.4); s.send("echo all good\r", 1.2)
+    assert "no errors" in s.text().lower(), s.text()
+
+@test
+def compile_offers_to_save_modified_files(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send("abc", 0.2)
+    s.send(F10, 0.4); s.send("true\r", 0.5)
+    assert "Save modified files" in s.text(), s.text()
+    s.send("y", 1.0)
+    eq(read(env, "a.txt"), "abcx\n")
+
+@test
+def grep_jumps_to_first_match_and_lists_the_rest(env):
+    env.write("a.txt", "nothing\n")
+    env.write("one.txt", "first\nneedle here\n")
+    env.write("two.txt", "needle too\n")
+    s = env.start("a.txt")
+    s.send(S_F10, 0.4)
+    assert "Search files for" in s.text(), s.text()
+    s.send("needle\r", 1.5)
+    t = s.text()
+    assert "* Grep Log *" in t and "one.txt:2:needle here" in t, t
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("one.txt") and x[0] == 2 for x in st), st
+    s.send(alt("="), 0.6)
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("two.txt") and x[0] == 1 for x in st), st
+
+@test
+def grep_with_quotes_and_no_match(env):
+    env.write("a.txt", "it's \"quoted\"\n")
+    s = env.start("a.txt")
+    s.send(S_F10, 0.4); s.send("it's\r", 1.2)
+    assert "a.txt:1:" in s.text(), s.text()
+    s.send(S_F10, 0.4); s.send("zzzzzz\r", 1.2)
+    assert "No matches" in s.text(), s.text()
+
+@test
+def tag_lookup_with_pattern_and_line_number(env):
+    env.write("lib.c", "int one;\nint helper(int x)\n{\n  return x;\n}\n")
+    env.write("tags", "!_TAG_FILE_FORMAT\t2\nhelper\tlib.c\t/^int helper(int x)$/;\"\tf\nlast\tlib.c\t5;\"\tf\n")
+    env.write("main.c", "helper(3);\nlast\n")
+    s = env.start("main.c")
+    s.send(ctrl("k") + ";", 0.4)
+    assert "Tag:" in s.text() and "helper" in s.text(), s.text()
+    s.send("\r", 0.6)
+    assert s.stat()[4].endswith("lib.c"), s.stat()
+    eq(s.line_no(), 2)
+    s.send(ctrl("k") + "p", 0.3)
+    s.send(DOWN, 0.2); s.send(ctrl("k") + ";", 0.4); s.send("\r", 0.6)
+    eq(s.line_no(), 5)
+
+@test
+def error_formats_are_recognised(env):
+    env.write("a.txt", "x\n")
+    env.write("p.py", "a\nb\nc\n")
+    env.write("g.go", "1\n2\n3\n4\n")
+    script = env.write("b.sh", "echo '  File \"p.py\", line 3, in <module>'\n"
+                       "echo './g.go:4:9: undefined: x'\n")
+    s = env.start("a.txt")
+    s.send(F10, 0.4); s.send("sh b.sh\r", 1.2)
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("p.py") and x[0] == 3 for x in st), st
+    s.send(alt("="), 0.6)
+    st = [s.stat(y) for y in range(s.rows) if s.row(y).startswith("L ")]
+    assert any(x and x[4].endswith("g.go") and x[0] == 4 and x[1] == 9 for x in st), st
+
+@test
+def tools_menu(env):
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt")
+    s.send(ESC, 0.3); s.send("t", 0.3)
+    t = s.text()
+    assert "Compile" in t and "Grep" in t and "Tag" in t, t
+
+# ------------------------------------------------------------------ the shipped mkedit.cfg
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+def sample_key_lines():
+    import re
+    out = []
+    for line in open(os.path.join(ROOT, "mkedit.cfg")):
+        m = re.match(r"#key (\S+(?: \S+)?) = (\w+)\s*$", line)
+        if m:
+            out.append((m.group(1), m.group(2)))
+    return out
+
+@test
+def sample_config_key_lines_are_valid_and_really_conflict(env):
+    import re
+    defs = open(os.path.join(ROOT, "src", "uDefs.pas")).read()
+    bound = {k.replace("''", "'") for k in re.findall(r"Bind\('((?:[^']|'')*)'", defs)}
+    names = re.search(r"CmdNames: array\[TCmd\] of string = \((.*?)\n  \);", defs, re.S).group(1)
+    cmds = set(re.findall(r"'(\w+)'", names))
+    lines = sample_key_lines()
+    assert len(lines) >= 30, len(lines)
+    spare = {"C-\\", "A-t"}                    # keys offered for functions that would lose theirs
+    for key, cmd in lines:
+        assert cmd in cmds, "unknown command " + cmd
+        assert key in bound or key in spare, "%s is not bound by default, so it is no conflict" % key
+    # every "#key" line in the file is one of those (the MacroBegin line is the documented example)
+    text = open(os.path.join(ROOT, "mkedit.cfg")).read().split("\n")
+    others = [l for l in text if l.startswith("#key ") and "MacroBegin" not in l]
+    eq(len(others), len(lines))
+
+@test
+def sample_config_has_no_effect_until_uncommented(env):
+    cfg = os.path.join(env.home, ".config", "mkedit"); os.makedirs(cfg)
+    import shutil
+    shutil.copy(os.path.join(ROOT, "mkedit.cfg"), os.path.join(cfg, "mkedit.cfg"))
+    s, t = edit(env, "abc\n", ctrl("t"))               # still DelRtWord
+    eq(t, "\n")
+
+@test
+def sample_config_fully_uncommented_gives_joe_keys(env):
+    import re
+    cfg = os.path.join(env.home, ".config", "mkedit"); os.makedirs(cfg)
+    text = open(os.path.join(ROOT, "mkedit.cfg")).read()
+    text = re.sub(r"^#(key )", r"\1", text, flags=re.M)
+    open(os.path.join(cfg, "mkedit.cfg"), "w").write(text)
+    # ^A start of line, ^E end of line, ^D delete char, ^W delete word, ^T opens the menu
+    s, t = edit(env, "abc def\n", RIGHT * 3, ctrl("a"), "X", ctrl("e"), "Y")
+    eq(t, "Xabc defY\n")
+    s, t = edit(env, "abc def\n", ctrl("d"), ctrl("w"), name="b.txt")
+    eq(t, "def\n")                                 # ^D deletes "a", ^W then deletes "bc "
+    # ^U / ^V page keys, ^J delete to end of line, ^K D saves instead of exiting
+    env.write("c.txt", "".join("line%d\n" % i for i in range(1, 100)))
+    s = env.start("c.txt")
+    s.send(ctrl("v"), 0.3)
+    assert s.line_no() > 15, s.stat()
+    s.send(ctrl("u"), 0.3)
+    eq(s.line_no(), 1)
+    s.send("zz", 0.2)
+    s.send(ctrl("k") + "d", 0.5)
+    assert read(env, "c.txt").startswith("zzline1"), "^K D now saves"
+    assert not s.exited(0.5)
+    # Alt-W / Alt-Z scroll, Alt-X runs a command
+    s.send(alt("z"), 0.3)
+    assert s.row(1).startswith("line2"), s.row(1)
+    s.send(alt("w"), 0.3)
+    assert s.row(1).startswith("zzline1"), s.row(1)
 
 
 def main():

@@ -50,6 +50,7 @@ type
     svLine, svTop: Int64;
     svCol, svLeft: Integer;
     cmode: Boolean;
+    scratch: Boolean;      { a log buffer, not a file }
     expand: Boolean;       { Tab inserts blanks (True) or a physical tab character }
     constructor Create;
     destructor Destroy; override;
@@ -89,6 +90,9 @@ type
     optCutLine, optLineBefore: Boolean;
     optTrim, optEof, optDelJoin, optReturnSplit, optDelWs, optLastPrompt: Boolean;
     killMax: Integer;
+    buildCmd, buildCwd: string;
+    buildDoc, grepDoc, errDoc: TDoc;
+    errLine: Int64;
     defExts: TStringList;
     fOptsR: string;
     hlLine: Int64;
@@ -187,7 +191,20 @@ type
     procedure DoLiteral;
     procedure DoUnKill;
     procedure DoUndoLine;
+    procedure DoUndoRedo(redo: Boolean);
+    function WordUnderCursor: string;
+    function LogDoc(var slot: TDoc; const title: string): TDoc;
+    procedure FillLog(d: TDoc; lines: TStrings);
+    procedure ShowLog(d: TDoc);
+    procedure JumpToError(const f: string; ln: Int64; col: Integer);
+    procedure DoNextError(dir: Integer);
+    procedure RunToLog(const cmd: string; var slot: TDoc; const title: string; out status: Integer);
+    procedure DoCompile;
+    procedure DoGrep;
+    procedure DoTag;
     procedure DoWrapPara;
+    procedure DoCenterLine;
+    procedure DoFilterBlock;
     procedure DoMatch;
     procedure DoBoxMove(dir: Integer);
     procedure KillPush(kind: TKillKind; sc: TScrap);
@@ -342,7 +359,7 @@ begin
   optSmart := False; optExpand := True; optTabsOut := False; optBackup := True;
   optCutLine := True; optLineBefore := False;
   optTrim := True; optEof := True; optDelJoin := True; optReturnSplit := True; optDelWs := True;
-  optLastPrompt := True; killMax := 30; fOptsR := 'I'; hlLen := 0;
+  optLastPrompt := True; killMax := 30; buildCmd := 'make'; errLine := -1; fOptsR := 'I'; hlLen := 0;
   defExts := TStringList.Create;
   cfgMacros := TStringList.Create;
   expandMode := 0;
@@ -880,6 +897,12 @@ begin
   if k.code = kcPasteEnd then begin pasting := False; Exit; end;
   msgText := '';
   hlLen := 0;
+  { one undo step per key; plain typing on one line merges into a single step }
+  Inc(UndoSerial);
+  if (pending = '') and (((k.code = kcChar) and ((k.mods - [mShift]) = [])) or ((k.code in [kcBack, kcDel]) and (k.mods = []))) then
+    CD.SetStep(CW.line, CW.col, CW.line)
+  else
+    CD.SetStep(CW.line, CW.col, -1);
   if pending <> '' then begin
     seq := pending + ' ' + NormSecond(k);
     pending := '';
@@ -934,6 +957,7 @@ begin
     HandleKey(k);
     if running and (nwins > 0) then begin
       TrimEdited(CW.line);
+      CD.EndStep(CW.line, CW.col);
       TrackBlock;
       CW.doc.Seek(CW.line);
     end;
@@ -1188,6 +1212,7 @@ end;
 {$I app_block.inc}
 {$I app_files.inc}
 {$I app_search.inc}
+{$I app_tools.inc}
 {$I app_ui.inc}
 
 end.

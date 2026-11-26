@@ -19,7 +19,7 @@ type
     cmWordLeft, cmWordRight,
     { editing }
     cmAddLine, cmAlign, cmBackspace, cmDelCh, cmDelLine, cmDelLtWord, cmDelRtWord, cmDelToEol,
-    cmDupLine, cmGetPrev, cmInsertLine, cmJoinLine, cmLiteral, cmReturn, cmSplitLine, cmUnKill,
+    cmDupLine, cmGetPrev, cmInsertLine, cmJoinLine, cmLiteral, cmReturn, cmSplitLine, cmUnKill, cmUndo, cmRedo,
     { blocks and buffers }
     cmAppendScrbuff, cmCopy, cmCopyBlock, cmCopyOverBlock, cmCut, cmDeleteBlock, cmDropAnchor,
     cmGetScrbuff, cmMarkBlockBegin, cmMarkBlockEnd, cmMarkCharacter, cmMarkColumn, cmMarkLine,
@@ -43,9 +43,11 @@ type
     cmToggleSmartTabs, cmToggleTabsExpand, cmToggleTabsOut, cmToggleWordwrap,
     { other }
     cmDos, cmMainMenu, cmCurrentFilename, cmColors, cmInsertDate, cmInsertTime, cmMatch, cmQuickHelp, cmSetRmargin, cmShell,
-    cmUndoCursorline, cmWrapPara,
+    cmUndoCursorline, cmWrapPara, cmCenterLine, cmFilterBlock, cmNotModified,
     { open a particular pull-down menu directly (Alt-F, Alt-Q, Alt-P) }
-    cmMenuFile, cmMenuQuit, cmMenuPrint
+    cmMenuFile, cmMenuQuit, cmMenuPrint,
+    { programmer tools (after JOE) }
+    cmCompile, cmGrepFind, cmNextError, cmPrevError, cmTag
   );
 
 const
@@ -57,7 +59,7 @@ const
     'PageDown', 'PageUp', 'PrevPosition', 'ScreenLeft', 'ScreenRight', 'ScrollDown', 'ScrollUp',
     'WordLeft', 'WordRight',
     'AddLine', 'Align', 'Backspace', 'DelCh', 'DelLine', 'DelLtWord', 'DelRtWord', 'DelToEol',
-    'DupLine', 'GetPrev', 'InsertLine', 'JoinLine', 'Literal', 'Return', 'SplitLine', 'UnKill',
+    'DupLine', 'GetPrev', 'InsertLine', 'JoinLine', 'Literal', 'Return', 'SplitLine', 'UnKill', 'Undo', 'Redo',
     'AppendScrbuff', 'Copy', 'CopyBlock', 'CopyOverBlock', 'Cut', 'DeleteBlock', 'DropAnchor',
     'GetScrbuff', 'MarkBlockBegin', 'MarkBlockEnd', 'MarkCharacter', 'MarkColumn', 'MarkLine',
     'MoveBlock', 'Paste', 'PasteOver', 'ShiftLeft', 'ShiftRight', 'StoreScrbuff', 'UnmarkBlock',
@@ -72,8 +74,9 @@ const
     'ToggleBakups', 'ToggleBoxDraw', 'ToggleEnterMatching', 'ToggleIndent', 'ToggleInsert',
     'ToggleSmartTabs', 'ToggleTabsExpand', 'ToggleTabsOut', 'ToggleWordwrap',
     'Dos', 'MainMenu', 'CurrentFilename', 'Colors', 'InsertDate', 'InsertTime', 'Match', 'QuickHelp', 'SetRmargin', 'Shell',
-    'UndoCursorline', 'WrapPara',
-    'MenuFile', 'MenuQuit', 'MenuPrint'
+    'UndoCursorline', 'WrapPara', 'CenterLine', 'FilterBlock', 'NotModified',
+    'MenuFile', 'MenuQuit', 'MenuPrint',
+    'Compile', 'GrepFind', 'NextError', 'PrevError', 'Tag'
   );
 
 const
@@ -277,6 +280,45 @@ begin
   Bind('A-f', cmMenuFile);
   Bind('A-q', cmMenuQuit);
   Bind('A-p', cmMenuPrint);
+  { undo/redo: Ctrl-_ keeps QEdit's GetPrev, so undo is Alt-/ (and ^Q U), redo is Ctrl-^ (JOE's) and Alt-? }
+  Bind('A-/', cmUndo);
+  Bind('C-q u', cmUndo);
+  Bind('C-^', cmRedo);
+  Bind('A-?', cmRedo);
+  { build, grep and error list (JOE: compile, grep_find, nxterr, prverr, tag) }
+  Bind('F10', cmCompile);
+  Bind('S-F10', cmGrepFind);
+  Bind('A-=', cmNextError);
+  Bind('A--', cmPrevError);
+  Bind('C-k ;', cmTag);
+  { --- keys taken from the Unix editor JOE that were free (JOE's own meaning in comments) --- }
+  Bind('C-k l', cmGotoLine);            { goto line }
+  Bind('C-k u', cmBegFile);             { beginning of file }
+  Bind('C-k -', cmPrevPosition);        { previous position }
+  Bind('C-k m', cmMoveBlock);           { move block }
+  Bind('C-k o', cmHorizontalWindow);    { split window }
+  Bind('C-k g', cmGrowWindow);          { grow window }
+  Bind('C-k t', cmShrinkWindow);        { shrink window }
+  Bind('C-k i', cmZoomWindow);          { show one window / all windows }
+  Bind('C-k a', cmCenterLine);          { center line }
+  Bind('C-k j', cmWrapPara);            { format paragraph }
+  Bind('C-k ,', cmShiftLeft);           { indent less }
+  Bind('C-k .', cmShiftRight);          { indent more }
+  Bind('C-k /', cmFilterBlock);         { filter block through a command }
+  Bind('C-k [', cmMacroRecord);         { record macro }
+  Bind('C-k ]', cmMacroRecord);         { stop recording }
+  Bind('C-k !', cmDos);                 { run a command }
+  Bind('C-k ''', cmShell);              { shell }
+  Bind('C-k <', cmScreenLeft);          { pan left }
+  Bind('C-k >', cmScreenRight);         { pan right }
+  Bind('C-]', cmSplitLine);             { open line }
+  Bind('C-SPACE', cmDropAnchor);        { start marking }
+  Bind('C-DEL', cmDeleteBlock);         { delete block }
+  Bind('A-<', cmScreenLeft);
+  Bind('A->', cmScreenRight);
+  Bind('A-!', cmDos);
+  Bind('A-~', cmNotModified);           { mark the file as not modified }
+  Bind('A-\', cmHorizontalWindow);
 end;
 
 function CmdByName(const nm: string): TCmd;
@@ -322,6 +364,7 @@ initialization
   AddItem('K', 'Kill file (delete)', cmKillFile);
   AddItem('O', 'Shell', cmShell);
   AddItem('D', 'Dos command', cmDos);
+  AddItem('M', 'Mark file unmodified', cmNotModified);
   AddMenu('Block', 'B');
   AddItem('B', 'Mark block begin', cmMarkBlockBegin);
   AddItem('E', 'Mark block end', cmMarkBlockEnd);
@@ -338,6 +381,7 @@ initialization
   AddItem('O', 'Paste over', cmPasteOver);
   AddItem('S', 'Store scratch buffer', cmStoreScrbuff);
   AddItem('G', 'Get scratch buffer', cmGetScrbuff);
+  AddItem('F', 'Filter through command', cmFilterBlock);
   AddMenu('Edit', 'E');
   AddItem('A', 'Add line', cmAddLine);
   AddItem('I', 'Insert line', cmInsertLine);
@@ -351,6 +395,9 @@ initialization
   AddItem('W', 'Wrap paragraph', cmWrapPara);
   AddItem('T', 'Insert date and time', cmInsertDate);
   AddItem('N', 'Insert file name', cmCurrentFilename);
+  AddItem('C', 'Center line', cmCenterLine);
+  AddItem('Z', 'Undo', cmUndo);
+  AddItem('R', 'Redo', cmRedo);
   AddMenu('Search', 'S');
   AddItem('F', 'Find', cmFind);
   AddItem('R', 'Find and replace', cmFindReplace);
@@ -391,6 +438,12 @@ initialization
   AddItem('F', 'Form feed', cmPrintEject);
   AddItem('L', 'Left margin', cmSetPrintLeftMargin);
   AddItem('P', 'Page size', cmSetPrintPageSize);
+  AddMenu('Tools', 'T');
+  AddItem('C', 'Compile / build', cmCompile);
+  AddItem('G', 'Grep in files', cmGrepFind);
+  AddItem('N', 'Next error', cmNextError);
+  AddItem('P', 'Previous error', cmPrevError);
+  AddItem('T', 'Tag lookup (ctags)', cmTag);
   AddMenu('Quit', 'Q');
   AddItem('X', 'GExit (ask, exit all)', cmGExit);
   AddItem('Q', 'GPQuit (warn, exit all)', cmGPQuit);
