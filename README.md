@@ -12,7 +12,7 @@ keeps a **sliding 64K window** of a file in memory, so files of any size can be 
     build/mkedit [+LINE] [file | wildcard | directory]...
 
 `mkedit file 125` (or `file 125` at the prompt) starts at line 125. With no file name it asks for one (`File(s) to edit:`); wildcards and directories bring up a pick
-list. **F1** shows the key list (laid out like QEdit's help screen), **Esc** the menus.
+list. **F1** shows the key list (laid out like QEdit's help screen on wide terminals, followed by a scrollable list of every command with all its current keys and menu path), **Esc** the menus.
 
 ## How big files work
 

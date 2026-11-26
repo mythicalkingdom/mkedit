@@ -249,120 +249,188 @@ end;
 
 { ===================================================================== help }
 
+{ All keys bound to a command, in QEdit notation, shortest first. }
+function KeysFor(bindMap: TStringList; cmd: TCmd): string;
+var
+  i, p, j: Integer;
+  k: string;
+  list: TStringList;
+begin
+  list := TStringList.Create;
+  try
+    for i := 0 to bindMap.Count - 1 do
+      if TCmd(PtrInt(bindMap.Objects[i])) = cmd then begin
+        k := bindMap[i];
+        p := Pos(' ', k);
+        if p > 0 then k := KeyLabel(Copy(k, 1, p - 1)) + UpperCase(Copy(k, p + 1, MaxInt))
+        else k := KeyLabel(k);
+        list.Add(Format('%2d', [Length(k)]) + k);
+      end;
+    list.Sort;
+    Result := '';
+    for j := 0 to list.Count - 1 do begin
+      if Result <> '' then Result := Result + ', ';
+      Result := Result + Copy(list[j], 3, MaxInt);
+    end;
+  finally
+    list.Free;
+  end;
+end;
+
+{ "Esc F S": how to reach a command through the menus }
+function MenuPathFor(cmd: TCmd): string;
+var
+  m, i: Integer;
+begin
+  Result := '';
+  for m := 0 to High(Menus) do
+    for i := 0 to High(Menus[m].items) do
+      if Menus[m].items[i].cmd = cmd then
+        Exit('Esc ' + Menus[m].hot + ' ' + Menus[m].items[i].hot);
+end;
+
+type
+  THelpCat = record
+    title: string;
+    first, last: TCmd;
+  end;
+
+const
+  HelpCats: array[0..10] of THelpCat = (
+    (title: 'Cursor movement'; first: cmBegFile; last: cmWordRight),
+    (title: 'Editing'; first: cmAddLine; last: cmUnKill),
+    (title: 'Blocks and buffers'; first: cmAppendScrbuff; last: cmUnmarkBlock),
+    (title: 'Files'; first: cmChangeFilename; last: cmWriteBlock),
+    (title: 'Windows'; first: cmCloseWindow; last: cmZoomWindow),
+    (title: 'Macros'; first: cmExecuteScrap; last: cmMacroWrite),
+    (title: 'Printing'; first: cmPrintAll; last: cmSetPrintPageSize),
+    (title: 'Tabs'; first: cmSetCtabwidth; last: cmTabRt),
+    (title: 'Find and replace'; first: cmFind; last: cmRepeatFind),
+    (title: 'Modes'; first: cmToggleBakups; last: cmToggleWordwrap),
+    (title: 'Other'; first: cmDos; last: cmMenuPrint));
+
+{ The help screen scrolls: on a wide terminal the QEdit style overview comes first, then every
+  command with all its keys (as currently bound) and its menu path. }
 procedure TApp.ShowHelp;
+const
+  OVERVIEW_H = 33;
 var
   lines: TStringList;
-  W2, H2, top, i, y, wl, rest, wm, wr, x2, x3, hy: Integer;
+  W2, H2, top, i, wl, rest, wm, wr, x2, x3, hy, oh, total, vis, y, ci: Integer;
+  oy: Integer;
   k: TKey;
-  t: string;
+  t, keys, path: string;
+  c: TCmd;
 
-  procedure Section(const title: string; const rows: array of string; x, y, w: Integer);
+  procedure Section(const title: string; const rows: array of string; x, y0, w: Integer);
   var
     r, p, lw: Integer;
-    lbl, keys: string;
+    lbl, keyt: string;
   begin
-    ScrBox(x, y, w, Length(rows) + 2, 11, 1, False);
-    ScrPutsN(x + 1, y, title, w - 2, 15, 1);
+    ScrBox(x, y0 + oy, w, Length(rows) + 2, 11, 1, False);
+    ScrPutsN(x + 1, y0 + oy, title, w - 2, 15, 1);
     lw := 17;
     for r := 0 to High(rows) do begin
       p := Pos('|', rows[r]);
       lbl := Copy(rows[r], 1, p - 1);
-      keys := Copy(rows[r], p + 1, MaxInt);
-      ScrPutsN(x + 1, y + 1 + r, lbl, lw, 7, 1);
-      ScrPutsN(x + 1 + lw, y + 1 + r, keys, w - 2 - lw, 14, 1);
+      keyt := Copy(rows[r], p + 1, MaxInt);
+      ScrPutsN(x + 1, y0 + oy + 1 + r, lbl, lw, 7, 1);
+      ScrPutsN(x + 1 + lw, y0 + oy + 1 + r, keyt, w - 2 - lw, 14, 1);
     end;
   end;
 
-  procedure Add(const title: string; const rows: array of string);
+  procedure DrawOverview;
   var
-    r: Integer;
+    i: Integer;
   begin
-    lines.Add('=' + title);
-    for r := 0 to High(rows) do lines.Add(rows[r]);
-    lines.Add('');
+    ScrBox(0, oy, W2, OVERVIEW_H, 15, 1, False);
+    ScrPutsN(2, oy, ' mkedit Help ', 20, 15, 1);
+    ScrPutsN(18, oy, ' every command follows below: scroll with PgDn ', W2 - 20, 14, 1);
+    wl := 34;
+    rest := W2 - wl - 4;
+    wm := rest div 2;
+    wr := rest - wm - 1;
+    x2 := wl + 2;
+    x3 := x2 + wm + 1;
+    Section('Block', HelpBlock, 2, 1, wl);
+    Section('Edit', HelpEdit, 2, 1 + Length(HelpBlock) + 2, wl);
+    ScrBox(x2, oy + 1, rest + 1, Length(HelpCursor1) + 2, 11, 1, False);
+    ScrPutsN(x2 + 1, oy + 1, 'Cursor', 10, 15, 1);
+    for i := 0 to High(HelpCursor1) do begin
+      t := HelpCursor1[i];
+      ScrPutsN(x2 + 1, oy + 2 + i, Copy(t, 1, Pos('|', t) - 1), 17, 7, 1);
+      ScrPutsN(x2 + 18, oy + 2 + i, Copy(t, Pos('|', t) + 1, MaxInt), 8, 14, 1);
+      t := HelpCursor2[i];
+      ScrPutsN(x3, oy + 2 + i, Copy(t, 1, Pos('|', t) - 1), 17, 7, 1);
+      ScrPutsN(x3 + 18, oy + 2 + i, Copy(t, Pos('|', t) + 1, MaxInt), 8, 14, 1);
+    end;
+    hy := 1 + Length(HelpCursor1) + 2;
+    Section('Files', HelpFiles, x2, hy, wm);
+    Section('Macro', HelpMacro, x2, hy + Length(HelpFiles) + 2, wm);
+    Section('Windows', HelpWindows, x3, hy, wr + 1);
+    Section('Search/Replace', HelpSearch, x3, hy + Length(HelpWindows) + 2, wr + 1);
   end;
 
 begin
   W2 := ScrW;
   H2 := ScrH;
-  if W2 >= 96 then begin
-    repeat
-      ScrClear(7, 1);
-      ScrBox(0, 0, W2, Min(H2, 33), 15, 1, False);
-      ScrPutsN(2, 0, ' mkedit Help ', 20, 15, 1);
-      ScrPutsN(18, 0, ' Press <Esc> for the Menus, any other key to return ', W2 - 20, 14, 1);
-      wl := 34;
-      rest := W2 - wl - 4;
-      wm := rest div 2;
-      wr := rest - wm - 1;
-      x2 := wl + 2;
-      x3 := x2 + wm + 1;
-      Section('Block', HelpBlock, 2, 1, wl);
-      Section('Edit', HelpEdit, 2, 1 + Length(HelpBlock) + 2, wl);
-      { cursor spans two columns }
-      ScrBox(x2, 1, rest + 1, Length(HelpCursor1) + 2, 11, 1, False);
-      ScrPutsN(x2 + 1, 1, 'Cursor', 10, 15, 1);
-      for i := 0 to High(HelpCursor1) do begin
-        t := HelpCursor1[i];
-        ScrPutsN(x2 + 1, 2 + i, Copy(t, 1, Pos('|', t) - 1), 17, 7, 1);
-        ScrPutsN(x2 + 18, 2 + i, Copy(t, Pos('|', t) + 1, MaxInt), 8, 14, 1);
-        t := HelpCursor2[i];
-        ScrPutsN(x3, 2 + i, Copy(t, 1, Pos('|', t) - 1), 17, 7, 1);
-        ScrPutsN(x3 + 18, 2 + i, Copy(t, Pos('|', t) + 1, MaxInt), 8, 14, 1);
+  if W2 >= 96 then oh := OVERVIEW_H else oh := 0;
+  lines := TStringList.Create;
+  try
+    { the full command reference, built from the live key table }
+    for ci := 0 to High(HelpCats) do begin
+      lines.Add('=' + HelpCats[ci].title);
+      for c := HelpCats[ci].first to HelpCats[ci].last do begin
+        keys := KeysFor(bindMap, c);
+        path := MenuPathFor(c);
+        if (keys = '') and (path = '') then keys := '(no key)';
+        lines.Add(Format('%-20s', [CmdNames[c]]) + Format('%-34s', [keys]) + path);
       end;
-      hy := 1 + Length(HelpCursor1) + 2;
-      Section('Files', HelpFiles, x2, hy, wm);
-      Section('Macro', HelpMacro, x2, hy + Length(HelpFiles) + 2, wm);
-      Section('Windows', HelpWindows, x3, hy, wr + 1);
-      Section('Search/Replace', HelpSearch, x3, hy + Length(HelpWindows) + 2, wr + 1);
+      lines.Add('');
+    end;
+    lines.Add('Legend: ^ = Ctrl, @ = Alt, # = Shift.  ^K B means Ctrl-K then B.  Esc F S means Esc, F, S in the menus.');
+    lines.Add('Keys can be changed in ~/.config/mkedit/mkedit.cfg (key NAME = Command).');
+    total := oh + lines.Count;
+    vis := H2 - 1;
+    top := 0;
+    repeat
+      if top > total - vis then top := total - vis;
+      if top < 0 then top := 0;
+      ScrClear(7, 1);
+      oy := -top;
+      if oh > 0 then DrawOverview;
+      for i := 0 to lines.Count - 1 do begin
+        y := oh + i - top;
+        if (y < 0) or (y >= vis) then Continue;
+        t := lines[i];
+        if (t <> '') and (t[1] = '=') then begin
+          ScrFill(0, y, W2, 196, 11, 1);
+          ScrPutsN(1, y, ' ' + Copy(t, 2, MaxInt) + ' ', W2 - 2, 15, 1);
+        end else if t <> '' then begin
+          ScrPutsN(2, y, Copy(t, 1, 20), 20, 7, 1);
+          ScrPutsN(22, y, Copy(t, 21, 34), 34, 14, 1);
+          ScrPutsN(56, y, Copy(t, 55, MaxInt), W2 - 57, 11, 1);
+        end;
+      end;
+      ScrFill(0, H2 - 1, W2, 32, 0, 7);
+      ScrPutsN(1, H2 - 1, 'Up/Down PgUp/PgDn Home/End scroll   Esc = menus   any other key = back', W2 - 2, 0, 7);
       ScrHideCursor;
       ScrFlush;
       k := GetKey;
-      if k.code <> kcNone then Break;
+      case k.code of
+        kcUp: Dec(top);
+        kcDown: Inc(top);
+        kcPgUp: Dec(top, vis - 1);
+        kcPgDn: Inc(top, vis - 1);
+        kcHome: top := 0;
+        kcEnd: top := total;
+        kcNone: ;
+      else
+        Break;
+      end;
     until False;
-  end else begin
-    lines := TStringList.Create;
-    try
-      Add('Block', HelpBlock);
-      Add('Cursor', HelpCursor1);
-      Add('', HelpCursor2);
-      Add('Edit', HelpEdit);
-      Add('Files', HelpFiles);
-      Add('Windows', HelpWindows);
-      Add('Search/Replace', HelpSearch);
-      Add('Macro', HelpMacro);
-      top := 0;
-      repeat
-        ScrClear(7, 1);
-        ScrFill(0, 0, W2, 32, 0, 7);
-        ScrPutsN(1, 0, 'mkedit Help: Up/Down scroll, Esc = menus, other key = back', W2 - 2, 0, 7);
-        y := 1;
-        i := top;
-        while (y < H2) and (i < lines.Count) do begin
-          t := lines[i];
-          if (t <> '') and (t[1] = '=') then ScrPutsN(1, y, Copy(t, 2, MaxInt), W2 - 2, 15, 1)
-          else if t <> '' then begin
-            ScrPutsN(2, y, Copy(t, 1, Pos('|', t) - 1), 18, 7, 1);
-            ScrPutsN(20, y, Copy(t, Pos('|', t) + 1, MaxInt), W2 - 22, 14, 1);
-          end;
-          Inc(y); Inc(i);
-        end;
-        ScrHideCursor;
-        ScrFlush;
-        k := GetKey;
-        case k.code of
-          kcUp: if top > 0 then Dec(top);
-          kcDown: if top < lines.Count - 1 then Inc(top);
-          kcPgUp: top := Max(0, top - (H2 - 2));
-          kcPgDn: top := Min(lines.Count - 1, top + (H2 - 2));
-          kcNone: ;
-        else
-          Break;
-        end;
-      until False;
-    finally
-      lines.Free;
-    end;
+  finally
+    lines.Free;
   end;
   if k.code = kcEsc then RunMenu(-1);
 end;

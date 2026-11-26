@@ -562,11 +562,33 @@ def help_screen(env):
         s = env.start("a.txt", rows=rows, cols=cols)
         s.send(F1, 0.4)
         t = s.text()
-        assert "copy block" in t and "goto line" in t, t
         if cols >= 96:
-            assert "Search/Replace" in t and "Windows" in t, t
+            assert "copy block" in t and "Search/Replace" in t and "Windows" in t, t
+        else:
+            assert "Cursor movement" in t and "BegFile" in t, t
         s.send("x", 0.3)
-        assert "copy block" not in s.text()
+        assert "BegFile" not in s.text() and "copy block" not in s.text()
+
+@test
+def help_screen_scrolls_to_every_command(env):
+    from_defs = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "uDefs.pas")).read()
+    import re
+    names = re.search(r"CmdNames: array\[TCmd\] of string = \((.*?)\n  \);", from_defs, re.S).group(1)
+    cmds = [n for n in re.findall(r"'(\w+)'", names) if n]
+    env.write("a.txt", "x\n")
+    s = env.start("a.txt", rows=25, cols=100)
+    s.send(F1, 0.4)
+    seen = set()
+    for _ in range(60):
+        for r in s.rows_text():
+            seen.update(w for w in r.replace(",", " ").split())
+        s.send(PGDN, 0.15)
+    missing = [c for c in cmds if c not in seen and not c.startswith("Menu") and c != "MainMenu"]
+    assert not missing, missing
+    s.send(HOME, 0.2)
+    assert "mkedit Help" in s.text()
+    s.send("x", 0.3)
+    assert "mkedit Help" not in s.text()
 
 @test
 def start_without_file_prompts(env):
